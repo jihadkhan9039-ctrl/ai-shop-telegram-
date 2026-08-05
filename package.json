@@ -1,0 +1,21 @@
+{
+  "name": "telegram-shop-bot",
+  "version": "1.0.0",
+  "description": "Feature-rich Telegram Paid Subscription & Digital Asset Selling Bot (Telegraf + Firestore)",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node --watch index.js"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "firebase-admin": "^12.1.0",
+    "express": "^4.19.2",
+    "node-cron": "^3.0.3",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
