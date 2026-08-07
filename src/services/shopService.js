@@ -107,8 +107,12 @@ async function deletePlan(serviceId, planId) {
   await batch.commit();
 }
 
-/** Add one or many credential strings to a plan's stock (bulk = newline separated). */
-async function addStock(serviceId, planId, credentialsText) {
+/**
+ * Add MANY credentials to a plan's stock - one line = one separate item
+ * that will be delivered (and removed from stock) individually to each
+ * buyer. Good for simple "email:pass" style stock.
+ */
+async function addStockBulk(serviceId, planId, credentialsText) {
   const lines = credentialsText
     .split('\n')
     .map((l) => l.trim())
@@ -127,6 +131,27 @@ async function addStock(serviceId, planId, credentialsText) {
   });
   await batch.commit();
   return lines.length;
+}
+
+/**
+ * Add exactly ONE credential/item to a plan's stock, preserving the full
+ * text as-is (including any line breaks). Use this for items that aren't
+ * a simple "email:pass" line - e.g. a profile name + PIN on separate
+ * lines, or a Gemini activation link with extra instructions. The whole
+ * block is delivered and removed from stock together as a single unit.
+ */
+async function addStockSingle(serviceId, planId, credentialText) {
+  const text = credentialText.trim();
+  if (!text) return 0;
+
+  const planRef = servicesCol.doc(serviceId).collection('plans').doc(planId);
+  const stockCol = planRef.collection('stock');
+  const ref = stockCol.doc();
+  await db.runTransaction(async (tx) => {
+    tx.set(ref, { credential: text, addedAt: admin.firestore.FieldValue.serverTimestamp() });
+    tx.update(planRef, { stockCount: admin.firestore.FieldValue.increment(1) });
+  });
+  return 1;
 }
 
 /**
@@ -175,7 +200,8 @@ module.exports = {
   getPlan,
   createPlan,
   deletePlan,
-  addStock,
+  addStockBulk,
+  addStockSingle,
   popStock,
   recordOrder,
 };

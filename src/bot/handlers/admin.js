@@ -185,7 +185,8 @@ function registerAdminHandler(bot) {
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
-          [Markup.button.callback('➕ Add Stock', `adm_addstock_${serviceId}_${planId}`)],
+          [Markup.button.callback('➕ Add Single Item', `adm_addstock1_${serviceId}_${planId}`)],
+          [Markup.button.callback('➕ Add Bulk (One Per Line)', `adm_addstockbulk_${serviceId}_${planId}`)],
           [Markup.button.callback('🗑 Delete Plan', `adm_delplan_${serviceId}_${planId}`)],
           [Markup.button.callback('⬅️ Back', `adm_svc_${serviceId}`)],
         ]),
@@ -200,12 +201,33 @@ function registerAdminHandler(bot) {
     await showServiceDetail(ctx, serviceId);
   }));
 
-  bot.action(/^adm_addstock_(.+)_(.+)$/, adminOnly(async (ctx) => {
+  // Single item: the ENTIRE next message (even if it spans multiple lines,
+  // e.g. "Profile: Kids\nPIN: 4821" or a Gemini activation link + notes) is
+  // stored as ONE stock entry, delivered whole to exactly one buyer.
+  bot.action(/^adm_addstock1_(.+)_(.+)$/, adminOnly(async (ctx) => {
     await ctx.answerCbQuery();
     const [, serviceId, planId] = ctx.match;
-    ctx.session.adminState = { step: 'add_stock', serviceId, planId };
+    ctx.session.adminState = { step: 'add_stock_single', serviceId, planId };
     await ctx.editMessageText(
-      '➕ *Add Stock*\n\nSend one credential per line (bulk supported).\nExample:\n`user1@mail.com:pass1`\n`user2@mail.com:pass2`',
+      '➕ *Add Single Item*\n\n' +
+        'Send the FULL item exactly as it should be delivered to one buyer. ' +
+        'Any format works - email:pass, a profile name + PIN, an activation link, etc. ' +
+        'Multiple lines are fine - it will be saved and delivered as ONE piece of stock.\n\n' +
+        'Example:\n`Profile: Kids\nPIN: 4821`\n\nor\n\n`https://gemini.google.com/activate/xyz123`',
+      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Cancel', `adm_plan_${serviceId}_${planId}`)]]) }
+    );
+  }));
+
+  // Bulk: one LINE = one SEPARATE stock item (classic email:pass list import).
+  bot.action(/^adm_addstockbulk_(.+)_(.+)$/, adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const [, serviceId, planId] = ctx.match;
+    ctx.session.adminState = { step: 'add_stock_bulk', serviceId, planId };
+    await ctx.editMessageText(
+      '➕ *Add Bulk Stock*\n\n' +
+        'Send MANY items at once - one item per LINE. Each line becomes a separate ' +
+        'piece of stock delivered to a different buyer. Only use this for simple ' +
+        'single-line items like email:pass.\n\nExample:\n`user1@mail.com:pass1`\n`user2@mail.com:pass2`',
       { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Cancel', `adm_plan_${serviceId}_${planId}`)]]) }
     );
   }));
@@ -273,11 +295,19 @@ function registerAdminHandler(bot) {
         break;
       }
 
-      case 'add_stock': {
+      case 'add_stock_single': {
         const text = ctx.message.text || '';
-        const count = await shopService.addStock(state.serviceId, state.planId, text);
+        const count = await shopService.addStockSingle(state.serviceId, state.planId, text);
         ctx.session.adminState = null;
-        await ctx.reply(`✅ Added ${count} credential(s) to stock.`, adminMenu);
+        await ctx.reply(count ? '✅ Added 1 item to stock.' : '❌ Empty message, nothing added.', adminMenu);
+        break;
+      }
+
+      case 'add_stock_bulk': {
+        const text = ctx.message.text || '';
+        const count = await shopService.addStockBulk(state.serviceId, state.planId, text);
+        ctx.session.adminState = null;
+        await ctx.reply(`✅ Added ${count} item(s) to stock.`, adminMenu);
         break;
       }
 
