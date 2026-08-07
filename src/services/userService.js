@@ -52,6 +52,7 @@ async function ensureUser(ctx, referredBy = null) {
     banned: false,
     joinedAt: admin.firestore.FieldValue.serverTimestamp(),
     channelsVerifiedAt: null,
+    lastForceJoinCheckAt: null,
   };
 
   await ref.set(newUser);
@@ -69,13 +70,25 @@ async function ensureUser(ctx, referredBy = null) {
   return { user: newUser, isNew: true };
 }
 
-/** Mark the timestamp when a user first passes the 4-channel force-join check. */
+/** One-time timestamp: the FIRST time this user passed the 4-channel check.
+ *  Used by referralCron.js for the 24h referral-hold calculation - never overwritten. */
 async function markChannelsVerified(telegramId) {
   const ref = usersCol.doc(String(telegramId));
   const snap = await ref.get();
   if (snap.exists && !snap.data().channelsVerifiedAt) {
     await ref.update({ channelsVerifiedAt: admin.firestore.FieldValue.serverTimestamp() });
   }
+}
+
+/** Rolling timestamp: the most recent time we live-checked force-join membership.
+ *  Used only by the forceJoin middleware's TTL cache - safe to overwrite every time.
+ *  Uses set+merge (not update) because on a brand-new user's very first message,
+ *  forceJoin's middleware runs before /start has created the user doc yet. */
+async function markForceJoinRecheck(telegramId) {
+  await usersCol.doc(String(telegramId)).set(
+    { lastForceJoinCheckAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
 }
 
 /** Atomically add (or subtract, using a negative number) to a user's balance. */
@@ -110,6 +123,7 @@ module.exports = {
   getUser,
   ensureUser,
   markChannelsVerified,
+  markForceJoinRecheck,
   adjustBalance,
   setBanned,
   iterateAllUsers,
