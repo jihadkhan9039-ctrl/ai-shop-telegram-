@@ -51,6 +51,18 @@ function registerAdminHandler(bot) {
     await ctx.reply('🛠 *Admin Panel*', { parse_mode: 'Markdown', ...adminMenu });
   }));
 
+  // Direct shortcut to broadcast without going through the full /adminpanel menu.
+  // All registered users (everyone who has ever pressed /start) are stored in
+  // Firestore's `users` collection - see userService.iterateAllUsers() below,
+  // used for the actual sending.
+  bot.command('broadcast', adminOnly(async (ctx) => {
+    ctx.session.adminState = { step: 'broadcast' };
+    await ctx.reply(
+      '📢 *Broadcast*\n\nSend the message (text, photo, etc.) you want to broadcast to ALL users who have started the bot.',
+      { parse_mode: 'Markdown' }
+    );
+  }));
+
   bot.action('adm_menu', adminOnly(async (ctx) => {
     await ctx.answerCbQuery();
     ctx.session.adminState = null;

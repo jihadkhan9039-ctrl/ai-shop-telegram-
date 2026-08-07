@@ -63,27 +63,34 @@ async function forceJoinMiddleware(ctx, next) {
   // The bot admin should never be locked out of /adminpanel by force-join.
   if (isAdmin(userId)) return next();
 
-  // --- FAST PATH ---
+  // /start should ALWAYS live-check join status - both for brand-new users
+  // and for returning users who press /start again to re-verify. Every
+  // OTHER message/click still uses the fast TTL cache below for speed.
+  const isStartCommand = ctx.message && typeof ctx.message.text === 'string' && /^\/start(\s|$)/.test(ctx.message.text);
+
+  // --- FAST PATH (skipped for /start, see above) ---
   // Re-checking 4 channels via the Telegram API on EVERY single update is
   // slow (especially on low-CPU free hosting). We cache a verified result
   // for RECHECK_INTERVAL_MS so most messages skip the live check entirely,
   // but we DON'T trust it forever - after the window expires we quietly
   // re-verify, so someone who joined then left gets caught again.
-  const cachedAt = ctx.session && ctx.session.forceJoinVerifiedAt;
-  if (cachedAt && Date.now() - cachedAt < RECHECK_INTERVAL_MS) {
-    return next();
-  }
+  if (!isStartCommand) {
+    const cachedAt = ctx.session && ctx.session.forceJoinVerifiedAt;
+    if (cachedAt && Date.now() - cachedAt < RECHECK_INTERVAL_MS) {
+      return next();
+    }
 
-  const existingUser = await getUser(userId).catch(() => null);
-  const lastCheckMs =
-    existingUser && existingUser.lastForceJoinCheckAt && existingUser.lastForceJoinCheckAt.toMillis
-      ? existingUser.lastForceJoinCheckAt.toMillis()
-      : null;
-  if (lastCheckMs && Date.now() - lastCheckMs < RECHECK_INTERVAL_MS) {
-    if (ctx.session) ctx.session.forceJoinVerifiedAt = lastCheckMs;
-    return next();
+    const existingUser = await getUser(userId).catch(() => null);
+    const lastCheckMs =
+      existingUser && existingUser.lastForceJoinCheckAt && existingUser.lastForceJoinCheckAt.toMillis
+        ? existingUser.lastForceJoinCheckAt.toMillis()
+        : null;
+    if (lastCheckMs && Date.now() - lastCheckMs < RECHECK_INTERVAL_MS) {
+      if (ctx.session) ctx.session.forceJoinVerifiedAt = lastCheckMs;
+      return next();
+    }
   }
-  // --- END FAST PATH --- (cache miss or expired -> fall through to a live check below)
+  // --- END FAST PATH --- (cache miss, expired, or /start -> live check below)
 
   const notJoined = await getNotJoinedChannels(ctx, userId);
 
