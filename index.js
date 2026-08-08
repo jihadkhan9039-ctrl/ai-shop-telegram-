@@ -29,6 +29,34 @@ if (missing.length > 0) {
   process.exit(1);
 }
 
+/**
+ * Telegram only allows ONE active long-polling connection per bot token.
+ * During a Render deploy, the OLD instance can briefly overlap with the
+ * NEW one starting up, causing a transient "409 Conflict: terminated by
+ * other getUpdates request" error. Instead of crashing the whole process
+ * (which can cascade into a crash-loop), retry with backoff so the new
+ * instance calmly waits its turn once the old one fully shuts down.
+ */
+async function launchBotWithRetry(bot, attempt = 1) {
+  const MAX_ATTEMPTS = 8;
+  const DELAY_MS = 5000;
+  try {
+    await bot.launch();
+    console.log('🤖 Telegram bot launched (long polling).');
+  } catch (err) {
+    const isConflict = err && err.response && err.response.error_code === 409;
+    if (isConflict && attempt < MAX_ATTEMPTS) {
+      console.warn(
+        `⚠️ Telegram 409 Conflict (another instance still shutting down?). ` +
+          `Retry ${attempt}/${MAX_ATTEMPTS} in ${DELAY_MS / 1000}s...`
+      );
+      await new Promise((r) => setTimeout(r, DELAY_MS));
+      return launchBotWithRetry(bot, attempt + 1);
+    }
+    throw err; // not a conflict, or we've retried enough - surface the real error
+  }
+}
+
 async function main() {
   // ---- Express server (SMS webhook + health check) ----
   const app = express();
@@ -40,8 +68,7 @@ async function main() {
 
   // ---- Telegram bot ----
   const bot = createBot();
-  await bot.launch();
-  console.log('🤖 Telegram bot launched (long polling).');
+  await launchBotWithRetry(bot);
 
   // ---- Referral bonus cron job ----
   startReferralCron(bot);
