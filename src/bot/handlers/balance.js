@@ -3,15 +3,22 @@
  * ------------------------------------------------------------
  * Handles:
  *  - "💰 Balance" reply button -> shows Name/ID/Balance/Referral earnings + "Add Fund"
- *  - "Add Fund" inline button -> deletes previous msg, shows bKash/Nagad choice
- *  - bKash/Nagad choice -> shows payment instructions + "Submit TrxID"
+ *  - "Add Fund" -> ASKS THE USER HOW MUCH THEY WANT TO DEPOSIT (min MIN_DEPOSIT,
+ *    default ৳100) before anything else.
+ *  - After a valid amount -> shows bKash/Nagad choice with that exact amount
+ *  - Choosing a method -> shows payment instructions (send THAT amount) + "Submit TrxID"
  *  - "Submit TrxID" -> puts user into an "awaiting text" state (ctx.session)
  *  - Plain text message while awaiting -> verified against transactions
- *    collection in Firestore; if valid & unused, credits the user's balance.
+ *    collection in Firestore (populated by the SMS webhook - see
+ *    src/webhook/smsWebhook.js); if valid & unused, credits the user's
+ *    balance with the REAL amount from the SMS (not just what they typed -
+ *    that's only used to show them the right instructions and to flag a
+ *    mismatch if the SMS amount doesn't match what they said they'd send).
  * ------------------------------------------------------------
- * NOTE: uses ctx.session (in-memory by default via telegraf's session()
- * middleware, registered in bot.js) to remember "what is this user typing
- * right now". Good enough for a single-process VPS deployment.
+ * NOTE: uses ctx.session (in-memory via telegraf's session() middleware,
+ * registered in bot.js) to remember "what is this user typing right now
+ * and for how much". Fine for a single-process deployment; resets on
+ * restart, which just means the user has to tap Add Fund again.
  * ------------------------------------------------------------
  */
 
@@ -24,9 +31,10 @@ const {
   submitTrxKeyboard,
 } = require('../keyboards/keyboards');
 
-// TODO: replace with your real merchant numbers.
+// TODO: replace with your real merchant numbers via Render env vars.
 const BKASH_NUMBER = process.env.BKASH_NUMBER || '01XXXXXXXXX (Personal)';
 const NAGAD_NUMBER = process.env.NAGAD_NUMBER || '01XXXXXXXXX (Personal)';
+const MIN_DEPOSIT = Number(process.env.MIN_DEPOSIT || 100);
 
 function balanceText(user) {
   return (
@@ -45,12 +53,17 @@ function registerBalanceHandler(bot) {
     await ctx.reply(balanceText(user), { parse_mode: 'Markdown', ...balanceKeyboard });
   });
 
+  // Step 1: "Add Fund" tapped -> ask how much they want to deposit.
   bot.action('add_fund', async (ctx) => {
     await ctx.answerCbQuery();
+    ctx.session.awaitingDepositAmount = true;
+    ctx.session.depositAmount = null;
+    ctx.session.awaitingTrxMethod = null;
     await ctx.deleteMessage().catch(() => {});
     await ctx.reply(
-      '➕ *Add Fund*\n\nChoose your payment method:',
-      { parse_mode: 'Markdown', ...paymentMethodKeyboard }
+      `➕ *Add Fund*\n\nকত টাকা যোগ করতে চান? নিচে শুধু সংখ্যাটা লিখে পাঠান।\n` +
+        `সর্বনিম্ন: *${taka(MIN_DEPOSIT)}*`,
+      { parse_mode: 'Markdown' }
     );
   });
 
@@ -60,15 +73,25 @@ function registerBalanceHandler(bot) {
     await ctx.editMessageText(balanceText(user), { parse_mode: 'Markdown', ...balanceKeyboard });
   });
 
+  // Step 2: user picked bKash/Nagad -> show that exact amount + number + Submit TrxID.
   async function showPaymentInstructions(ctx, method) {
     await ctx.answerCbQuery();
+    const amount = ctx.session.depositAmount;
+    if (!amount) {
+      // Session was lost (e.g. server restarted) - restart the flow cleanly.
+      ctx.session.awaitingDepositAmount = true;
+      return ctx.editMessageText(
+        `⚠️ Session expired. কত টাকা যোগ করতে চান? সর্বনিম্ন *${taka(MIN_DEPOSIT)}*`,
+        { parse_mode: 'Markdown' }
+      );
+    }
     const number = method === 'bKash' ? BKASH_NUMBER : NAGAD_NUMBER;
-    ctx.session.awaitingTrxMethod = method; // remember which method they picked
+    ctx.session.awaitingTrxMethod = method;
     await ctx.editMessageText(
       `📱 *Pay with ${method}*\n\n` +
-        `Send the desired amount to:\n\`${number}\`\n\n` +
-        `Once sent, you'll receive an SMS with a Transaction ID (TrxID). ` +
-        `Tap the button below and send that TrxID here to auto-verify and credit your balance.`,
+        `ঠিক *${taka(amount)}* পাঠান এই নাম্বারে:\n\`${number}\`\n\n` +
+        `পাঠানোর পর একটা SMS পাবেন যাতে Transaction ID (TrxID) থাকবে। ` +
+        `নিচের বাটনে ট্যাপ করে সেই TrxID এখানে পাঠান, balance অটোমেটিক যোগ হয়ে যাবে।`,
       { parse_mode: 'Markdown', ...submitTrxKeyboard }
     );
   }
@@ -76,53 +99,92 @@ function registerBalanceHandler(bot) {
   bot.action('pay_bkash', (ctx) => showPaymentInstructions(ctx, 'bKash'));
   bot.action('pay_nagad', (ctx) => showPaymentInstructions(ctx, 'Nagad'));
 
+  // Step 3: "Submit TrxID" tapped -> wait for the TrxID text.
   bot.action('submit_trx', async (ctx) => {
     await ctx.answerCbQuery();
     ctx.session.awaitingTrxId = true;
-    await ctx.reply('🧾 Please type/send your *TrxID* now (e.g. `9AK3XXXXXX`).', {
+    await ctx.reply('🧾 এখন আপনার *TrxID* পাঠান (যেমন `9AK3XXXXXX`)।', {
       parse_mode: 'Markdown',
     });
   });
 
-  // Plain-text listener: only acts when the user is in "awaiting TrxID" state.
-  // Registered with low priority (checked in bot.js AFTER the reply-keyboard
-  // `hears` handlers) so it never swallows menu button presses.
+  // Plain-text listener: routes based on which step the user is currently on.
+  // Registered with low priority (checked AFTER the reply-keyboard `hears`
+  // handlers, per registration order in bot.js) so it never swallows menu
+  // button presses. Falls through via next() when neither state applies.
   bot.on('text', async (ctx, next) => {
-    if (!ctx.session || !ctx.session.awaitingTrxId) return next();
+    if (!ctx.session) return next();
 
-    const trxId = ctx.message.text.trim();
-    ctx.session.awaitingTrxId = false;
+    // --- Step 2a: waiting for the deposit AMOUNT ---
+    if (ctx.session.awaitingDepositAmount) {
+      const raw = ctx.message.text.trim().replace(/,/g, '');
+      const amount = Number(raw);
 
-    const tx = await getTransaction(trxId);
-    if (!tx) {
+      if (!Number.isFinite(amount) || amount <= 0) {
+        return ctx.reply('❌ শুধু একটা সংখ্যা পাঠান, যেমন `500`।', { parse_mode: 'Markdown' });
+      }
+      if (amount < MIN_DEPOSIT) {
+        return ctx.reply(`❌ সর্বনিম্ন ডিপোজিট *${taka(MIN_DEPOSIT)}*। আরেকটা amount দিন।`, {
+          parse_mode: 'Markdown',
+        });
+      }
+
+      ctx.session.awaitingDepositAmount = false;
+      ctx.session.depositAmount = amount;
+
       return ctx.reply(
-        '❌ TrxID not found. Please double-check the ID from your SMS and try again, ' +
-          'or contact support if the payment already went through.'
+        `✅ Amount: *${taka(amount)}*\n\nএখন পেমেন্ট মেথড বেছে নিন:`,
+        { parse_mode: 'Markdown', ...paymentMethodKeyboard }
       );
     }
-    if (tx.used) {
-      return ctx.reply('⚠️ This TrxID has already been used to credit a balance.');
-    }
 
-    try {
-      await claimTransaction(trxId, ctx.from.id);
-    } catch (err) {
-      if (err.message === 'ALREADY_USED') {
-        return ctx.reply('⚠️ This TrxID has already been used to credit a balance.');
+    // --- Step 3a: waiting for the TrxID ---
+    if (ctx.session.awaitingTrxId) {
+      const trxId = ctx.message.text.trim();
+      ctx.session.awaitingTrxId = false;
+      const claimedAmount = ctx.session.depositAmount; // what the user said they'd send
+
+      const tx = await getTransaction(trxId);
+      if (!tx) {
+        return ctx.reply(
+          '❌ TrxID পাওয়া যায়নি। SMS থেকে ID-টা আবার চেক করে পাঠান, অথবা টাকা পাঠানো হয়ে থাকলে সাপোর্টে যোগাযোগ করুন।'
+        );
       }
-      console.error('claimTransaction error:', err);
-      return ctx.reply('❌ Something went wrong verifying your payment. Please contact support.');
+      if (tx.used) {
+        return ctx.reply('⚠️ এই TrxID আগেই একবার ব্যবহার হয়ে গেছে।');
+      }
+
+      try {
+        await claimTransaction(trxId, ctx.from.id);
+      } catch (err) {
+        if (err.message === 'ALREADY_USED') {
+          return ctx.reply('⚠️ এই TrxID আগেই একবার ব্যবহার হয়ে গেছে।');
+        }
+        console.error('claimTransaction error:', err);
+        return ctx.reply('❌ পেমেন্ট ভেরিফাই করতে সমস্যা হয়েছে। সাপোর্টে যোগাযোগ করুন।');
+      }
+
+      // Credit the REAL amount confirmed by the SMS webhook - never trust
+      // the user-typed amount for the actual credit, only for comparison.
+      await adjustBalance(ctx.from.id, tx.amount);
+      const user = await getUser(ctx.from.id);
+      ctx.session.depositAmount = null;
+      ctx.session.awaitingTrxMethod = null;
+
+      const mismatchNote =
+        claimedAmount && Math.abs(claimedAmount - tx.amount) > 0.5
+          ? `\n\n⚠️ আপনি বলেছিলেন ${taka(claimedAmount)}, কিন্তু SMS-এ পাওয়া গেছে ${taka(tx.amount)} - সেই অনুযায়ী যোগ করা হয়েছে।`
+          : '';
+
+      return ctx.reply(
+        `✅ *Payment Verified!*\n\n` +
+          `${taka(tx.amount)} আপনার ব্যালেন্সে যোগ হয়েছে।${mismatchNote}\n` +
+          `💵 New Balance: *${taka(user.balance)}*`,
+        { parse_mode: 'Markdown' }
+      );
     }
 
-    await adjustBalance(ctx.from.id, tx.amount);
-    const user = await getUser(ctx.from.id);
-
-    await ctx.reply(
-      `✅ *Payment Verified!*\n\n` +
-        `${taka(tx.amount)} has been added to your balance.\n` +
-        `💵 New Balance: *${taka(user.balance)}*`,
-      { parse_mode: 'Markdown' }
-    );
+    return next();
   });
 }
 
