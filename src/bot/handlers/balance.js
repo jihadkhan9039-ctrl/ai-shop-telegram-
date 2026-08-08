@@ -88,10 +88,11 @@ function registerBalanceHandler(bot) {
     const number = method === 'bKash' ? BKASH_NUMBER : NAGAD_NUMBER;
     ctx.session.awaitingTrxMethod = method;
     await ctx.editMessageText(
-      `📱 *Pay with ${method}*\n\n` +
-        `ঠিক *${taka(amount)}* পাঠান এই নাম্বারে:\n\`${number}\`\n\n` +
-        `পাঠানোর পর একটা SMS পাবেন যাতে Transaction ID (TrxID) থাকবে। ` +
-        `নিচের বাটনে ট্যাপ করে সেই TrxID এখানে পাঠান, balance অটোমেটিক যোগ হয়ে যাবে।`,
+      `📱 *${method}-এ পেমেন্ট করুন*\n\n` +
+        `${method} অ্যাপ খুলে **"Send Money"** অপশন থেকে ঠিক *${taka(amount)}* পাঠান এই নাম্বারে:\n` +
+        `\`${number}\`\n\n` +
+        `✅ পাঠানোর পর ${method} থেকে একটি নিশ্চিতকরণ SMS আসবে, যেখানে একটি *Transaction ID (TrxID)* উল্লেখ থাকবে।\n\n` +
+        `নিচের বাটনে ট্যাপ করে সেই TrxID পাঠিয়ে দিন — আপনার ব্যালেন্স স্বয়ংক্রিয়ভাবে যোগ হয়ে যাবে।`,
       { parse_mode: 'Markdown', ...submitTrxKeyboard }
     );
   }
@@ -103,9 +104,10 @@ function registerBalanceHandler(bot) {
   bot.action('submit_trx', async (ctx) => {
     await ctx.answerCbQuery();
     ctx.session.awaitingTrxId = true;
-    await ctx.reply('🧾 এখন আপনার *TrxID* পাঠান (যেমন `9AK3XXXXXX`)।', {
-      parse_mode: 'Markdown',
-    });
+    await ctx.reply(
+      '🧾 দয়া করে আপনার *Transaction ID (TrxID)* পাঠান।\n\nউদাহরণ: `9AK3XXXXXX`',
+      { parse_mode: 'Markdown' }
+    );
   });
 
   // Plain-text listener: routes based on which step the user is currently on.
