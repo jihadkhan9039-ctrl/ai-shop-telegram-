@@ -6,12 +6,14 @@
  * services/{serviceId}
  *   name        string   e.g. "Netflix"
  *   emoji       string   e.g. "🎬"
+ *   description string|null   shown to buyers before they pick a plan
  *   active      boolean
  *   createdAt   Timestamp
  *
  * services/{serviceId}/plans/{planId}
  *   title       string   e.g. "30 Days"
  *   price       number   e.g. 65
+ *   description string|null   shown to buyers on the order-confirm screen
  *   stockCount  number   (cached count, kept in sync with stock array length)
  *   active      boolean
  *
@@ -49,10 +51,16 @@ async function createService(name, emoji = '📦') {
   const ref = await servicesCol.add({
     name,
     emoji,
+    description: null,
     active: true,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
   return ref.id;
+}
+
+/** Set/replace the buyer-facing description shown before picking a plan. */
+async function setServiceDescription(serviceId, description) {
+  await servicesCol.doc(serviceId).update({ description: description || null });
 }
 
 async function deleteService(serviceId) {
@@ -92,11 +100,17 @@ async function createPlan(serviceId, title, price) {
   const ref = await servicesCol.doc(serviceId).collection('plans').add({
     title,
     price: Number(price),
+    description: null,
     stockCount: 0,
     active: true,
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
   });
   return ref.id;
+}
+
+/** Set/replace the buyer-facing description shown on the order-confirm screen. */
+async function setPlanDescription(serviceId, planId, description) {
+  await servicesCol.doc(serviceId).collection('plans').doc(planId).update({ description: description || null });
 }
 
 async function deletePlan(serviceId, planId) {
@@ -193,12 +207,14 @@ module.exports = {
   getAllServices,
   getService,
   createService,
+  setServiceDescription,
   deleteService,
   setServiceActive,
   getActivePlans,
   getAllPlans,
   getPlan,
   createPlan,
+  setPlanDescription,
   deletePlan,
   addStockBulk,
   addStockSingle,

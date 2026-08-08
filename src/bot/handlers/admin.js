@@ -128,17 +128,30 @@ function registerAdminHandler(bot) {
     const rows = [
       ...planRows,
       [Markup.button.callback('➕ Add Plan', `adm_addplan_${serviceId}`)],
+      [Markup.button.callback(service.description ? '✏️ Edit Description' : '✏️ Add Description', `adm_editdesc_svc_${serviceId}`)],
       [Markup.button.callback(service.active ? '🔴 Deactivate Service' : '🟢 Activate Service', `adm_toggle_${serviceId}`)],
       [Markup.button.callback('🗑 Delete Service', `adm_delsvc_${serviceId}`)],
       [Markup.button.callback('⬅️ Back to Services', 'adm_services')],
       backToMenuRow(),
     ];
 
-    await ctx.editMessageText(`${service.emoji || '📦'} *${service.name}*\n\nPlans:`, {
+    const descLine = service.description ? `\n📝 ${service.description}\n` : '';
+    await ctx.editMessageText(`${service.emoji || '📦'} *${service.name}*${descLine}\n\nPlans:`, {
       parse_mode: 'Markdown',
       ...Markup.inlineKeyboard(rows),
     });
   }
+
+  bot.action(/^adm_editdesc_svc_(.+)$/, adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const serviceId = ctx.match[1];
+    ctx.session.adminState = { step: 'edit_service_desc', serviceId };
+    await ctx.editMessageText(
+      '✏️ *Service Description*\n\nSend the description buyers will see before picking a plan ' +
+        '(e.g. what the service is, any notes). Send `-` to clear it.',
+      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Cancel', `adm_svc_${serviceId}`)]]) }
+    );
+  }));
 
   bot.action(/^adm_toggle_(.+)$/, adminOnly(async (ctx) => {
     const serviceId = ctx.match[1];
@@ -180,17 +193,30 @@ function registerAdminHandler(bot) {
     const [, serviceId, planId] = ctx.match;
     const plan = await shopService.getPlan(serviceId, planId);
     if (!plan) return showServiceDetail(ctx, serviceId);
+    const descLine = plan.description ? `\n📝 ${plan.description}\n` : '';
     await ctx.editMessageText(
-      `📦 *${plan.title}* - ${taka(plan.price)}\nStock: ${plan.stockCount ?? 0}`,
+      `📦 *${plan.title}* - ${taka(plan.price)}${descLine}\nStock: ${plan.stockCount ?? 0}`,
       {
         parse_mode: 'Markdown',
         ...Markup.inlineKeyboard([
           [Markup.button.callback('➕ Add Single Item', `adm_addstock1_${serviceId}_${planId}`)],
           [Markup.button.callback('➕ Add Bulk (One Per Line)', `adm_addstockbulk_${serviceId}_${planId}`)],
+          [Markup.button.callback(plan.description ? '✏️ Edit Description' : '✏️ Add Description', `adm_editdesc_plan_${serviceId}_${planId}`)],
           [Markup.button.callback('🗑 Delete Plan', `adm_delplan_${serviceId}_${planId}`)],
           [Markup.button.callback('⬅️ Back', `adm_svc_${serviceId}`)],
         ]),
       }
+    );
+  }));
+
+  bot.action(/^adm_editdesc_plan_(.+)_(.+)$/, adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const [, serviceId, planId] = ctx.match;
+    ctx.session.adminState = { step: 'edit_plan_desc', serviceId, planId };
+    await ctx.editMessageText(
+      '✏️ *Plan Description*\n\nSend the description buyers will see on the order-confirm screen ' +
+        'before they buy (e.g. what exactly they get, validity, warranty notes). Send `-` to clear it.',
+      { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Cancel', `adm_plan_${serviceId}_${planId}`)]]) }
     );
   }));
 
@@ -308,6 +334,24 @@ function registerAdminHandler(bot) {
         const count = await shopService.addStockBulk(state.serviceId, state.planId, text);
         ctx.session.adminState = null;
         await ctx.reply(`✅ Added ${count} item(s) to stock.`, adminMenu);
+        break;
+      }
+
+      case 'edit_service_desc': {
+        const text = (ctx.message.text || '').trim();
+        const description = text === '-' ? null : text;
+        await shopService.setServiceDescription(state.serviceId, description);
+        ctx.session.adminState = null;
+        await ctx.reply(description ? '✅ Description saved.' : '✅ Description cleared.', adminMenu);
+        break;
+      }
+
+      case 'edit_plan_desc': {
+        const text = (ctx.message.text || '').trim();
+        const description = text === '-' ? null : text;
+        await shopService.setPlanDescription(state.serviceId, state.planId, description);
+        ctx.session.adminState = null;
+        await ctx.reply(description ? '✅ Description saved.' : '✅ Description cleared.', adminMenu);
         break;
       }
 

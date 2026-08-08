@@ -54,13 +54,14 @@ function registerShopHandler(bot) {
       shopService.getActivePlans(serviceId),
     ]);
     if (!service) return ctx.editMessageText('❌ This service no longer exists.');
+    const descBlock = service.description ? `${service.description}\n\n` : '';
     if (plans.length === 0) {
-      return ctx.editMessageText(`${service.emoji || '📦'} *${service.name}*\n\nNo plans available right now.`, {
+      return ctx.editMessageText(`${service.emoji || '📦'} *${service.name}*\n\n${descBlock}No plans available right now.`, {
         parse_mode: 'Markdown',
         ...plansKeyboard(serviceId, []),
       });
     }
-    await ctx.editMessageText(`${service.emoji || '📦'} *${service.name}*\n\nSelect a plan:`, {
+    await ctx.editMessageText(`${service.emoji || '📦'} *${service.name}*\n\n${descBlock}Select a plan:`, {
       parse_mode: 'Markdown',
       ...plansKeyboard(serviceId, plans),
     });
@@ -76,12 +77,13 @@ function registerShopHandler(bot) {
     ]);
     if (!service || !plan) return ctx.editMessageText('❌ This item no longer exists.');
 
+    const descBlock = plan.description ? `\n📝 ${plan.description}\n` : '';
     await ctx.editMessageText(
       `🧾 *Order Summary*\n\n` +
         `Service: ${service.emoji || '📦'} ${service.name}\n` +
         `Plan: ${plan.title}\n` +
         `Price: *${taka(plan.price)}*\n` +
-        `In stock: ${plan.stockCount ?? 0}\n\n` +
+        `In stock: ${plan.stockCount ?? 0}\n${descBlock}\n` +
         `Confirm your purchase?`,
       { parse_mode: 'Markdown', ...confirmOrderKeyboard(serviceId, planId) }
     );
