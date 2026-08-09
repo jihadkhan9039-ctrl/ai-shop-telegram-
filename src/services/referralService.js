@@ -26,4 +26,10 @@ async function markRewarded(referredId) {
   await referralsCol.doc(String(referredId)).update({ rewarded: true });
 }
 
-module.exports = { getPendingReferrals, markRewarded };
+/** All referrals (rewarded or not) made by one specific referrer - for the "My Referrals" view. */
+async function getReferralsByReferrer(referrerId) {
+  const snap = await referralsCol.where('referrerId', '==', Number(referrerId)).get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+module.exports = { getPendingReferrals, markRewarded, getReferralsByReferrer };
