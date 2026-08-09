@@ -23,13 +23,19 @@
  */
 
 const { db, admin } = require('../config/firebase');
-const { adjustBalance } = require('./userService');
+const { adjustBalance, getUser, setLastReferralPayoutAt, markCapAlertSent } = require('./userService');
 const { taka } = require('../utils/helpers');
 
 const referralsCol = db.collection('referrals');
 
 const BONUS = Number(process.env.REFERRAL_BONUS || 5);
 const DAILY_CAP = Number(process.env.REFERRAL_DAILY_CAP || 10);
+// Minimum gap between two referral payouts to the SAME referrer. Throttles
+// bot-driven mass-fake-account bursts (a script spinning up many accounts
+// within seconds/minutes gets slowed down) without affecting a normal
+// person referring friends over time.
+const COOLDOWN_MS = Number(process.env.REFERRAL_COOLDOWN_SECONDS || 60) * 1000;
+const ADMIN_ID = process.env.ADMIN_ID;
 
 /** All referral records that have not yet been rewarded (used by the cron safety-sweep). */
 async function getPendingReferrals() {
@@ -92,17 +98,52 @@ async function tryPayoutReferral(referredId, telegram) {
     return;
   }
 
+  const referrer = await getUser(ref.referrerId).catch(() => null);
+
+  // Banned referrers never get paid, no matter what.
+  if (referrer && referrer.banned) {
+    console.log(`[referral] Referrer ${ref.referrerId} is banned - not paying out.`);
+    return;
+  }
+
+  // Cooldown: throttle rapid-fire payouts to the same referrer.
+  const lastPayoutMs =
+    referrer && referrer.lastReferralPayoutAt && referrer.lastReferralPayoutAt.toMillis
+      ? referrer.lastReferralPayoutAt.toMillis()
+      : null;
+  if (lastPayoutMs && Date.now() - lastPayoutMs < COOLDOWN_MS) {
+    console.log(`[referral] Referrer ${ref.referrerId} is in cooldown (< ${COOLDOWN_MS / 1000}s since last payout) - will retry later.`);
+    return;
+  }
+
   const rewardedToday = await countRewardedToday(ref.referrerId);
   if (rewardedToday >= DAILY_CAP) {
     console.log(
       `[referral] Referrer ${ref.referrerId} hit the daily cap (${DAILY_CAP}). ` +
         `Referral for ${referredId} stays pending - the hourly sweep will retry it.`
     );
+
+    // Alert the admin ONCE per referrer per day so suspicious high-volume
+    // referring can be manually reviewed (and the user banned if it's abuse).
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (ADMIN_ID && telegram && (!referrer || referrer.lastCapAlertDate !== todayStr)) {
+      markCapAlertSent(ref.referrerId, todayStr).catch((e) => console.error('[referral] markCapAlertSent failed:', e.message));
+      telegram
+        .sendMessage(
+          ADMIN_ID,
+          `⚠️ Referral daily cap reached\n\n` +
+            `Referrer ${ref.referrerId} has hit the daily cap of ${DAILY_CAP} referral bonuses. ` +
+            `This could be legitimate (a popular referrer) or fake-account abuse - worth reviewing.\n\n` +
+            `Use /adminpanel → Ban/Unban User if this looks like abuse.`
+        )
+        .catch((e) => console.error('[referral] admin cap-alert failed:', e.message));
+    }
     return;
   }
 
   await adjustBalance(ref.referrerId, BONUS, { referralEarning: true });
   await markRewarded(referredId);
+  setLastReferralPayoutAt(ref.referrerId).catch((e) => console.error('[referral] setLastReferralPayoutAt failed:', e.message));
   console.log(`[referral] Paid ${BONUS} taka to referrer ${ref.referrerId} for referred user ${referredId}.`);
 
   if (telegram) {

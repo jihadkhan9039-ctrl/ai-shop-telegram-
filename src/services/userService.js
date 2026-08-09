@@ -83,7 +83,7 @@ async function ensureUser(ctx, referredBy = null) {
 }
 
 /** One-time timestamp: the FIRST time this user passed the 4-channel check.
- *  Used by referralCron.js for the 24h referral-hold calculation - never overwritten. */
+ *  Triggers the instant referral payout (see forceJoin.js) - never overwritten after that. */
 async function markChannelsVerified(telegramId) {
   const ref = usersCol.doc(String(telegramId));
   const snap = await ref.get();
@@ -117,6 +117,21 @@ async function setBanned(telegramId, banned) {
   await usersCol.doc(String(telegramId)).update({ banned });
 }
 
+/** Rolling timestamp: the last time this user (as a REFERRER) was paid a
+ *  referral bonus. Used by referralService's cooldown anti-abuse check. */
+async function setLastReferralPayoutAt(telegramId) {
+  await usersCol.doc(String(telegramId)).set(
+    { lastReferralPayoutAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+}
+
+/** Records today's date on the user doc so we only alert the admin ONCE per
+ *  referrer per day when they hit the daily referral cap (avoids spam). */
+async function markCapAlertSent(telegramId, dateStr) {
+  await usersCol.doc(String(telegramId)).set({ lastCapAlertDate: dateStr }, { merge: true });
+}
+
 /** Return all user documents (used for broadcast). Streams in batches to avoid huge memory spikes. */
 async function* iterateAllUsers(batchSize = 300) {
   let lastDoc = null;
@@ -138,5 +153,7 @@ module.exports = {
   markForceJoinRecheck,
   adjustBalance,
   setBanned,
+  setLastReferralPayoutAt,
+  markCapAlertSent,
   iterateAllUsers,
 };

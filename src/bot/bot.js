@@ -17,8 +17,8 @@ const { registerReferralHandler } = require('./handlers/referral');
 const { registerBalanceHandler } = require('./handlers/balance');
 const { registerShopHandler } = require('./handlers/shop');
 const { registerAdminHandler } = require('./handlers/admin');
-const { ensureUser } = require('../services/userService');
-const { parseReferralCode, taka } = require('../utils/helpers');
+const { ensureUser, getUser } = require('../services/userService');
+const { parseReferralCode, taka, isAdmin } = require('../utils/helpers');
 
 /**
  * This bot is designed for 1-on-1 private chats only (shop, balance, admin
@@ -75,6 +75,22 @@ async function captureReferralOnStart(ctx, next) {
   return next();
 }
 
+/**
+ * banned=true was previously only checked at /start, meaning a banned user
+ * could keep using Shop/Balance/everything else as long as they didn't
+ * re-send /start. This closes that gap - EVERY update from a banned user
+ * (except the bot admin, who can never be banned) is blocked here.
+ */
+async function bannedGuard(ctx, next) {
+  const userId = ctx.from && ctx.from.id;
+  if (!userId || isAdmin(userId)) return next();
+  const user = await getUser(userId).catch(() => null);
+  if (user && user.banned) {
+    return ctx.reply('🚫 আপনার অ্যাকাউন্ট ব্যান করা হয়েছে। এটা ভুল মনে হলে সাপোর্টে যোগাযোগ করুন।').catch(() => {});
+  }
+  return next();
+}
+
 function createBot() {
   const bot = new Telegraf(process.env.BOT_TOKEN);
 
@@ -88,10 +104,13 @@ function createBot() {
   //    can block the update (see big comment above).
   bot.use(captureReferralOnStart);
 
-  // 4. Gate every update behind the 4-channel force-join check.
+  // 4. Block banned users everywhere, not just at /start.
+  bot.use(bannedGuard);
+
+  // 5. Gate every update behind the 4-channel force-join check.
   bot.use(forceJoinMiddleware);
 
-  // 5. Feature handlers, in an order that lets "hears" exact-matches win
+  // 6. Feature handlers, in an order that lets "hears" exact-matches win
   //    before the generic catch-all listeners inside balance.js / admin.js.
   registerStartHandler(bot);
   registerSupportHandler(bot);
