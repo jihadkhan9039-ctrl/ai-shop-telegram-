@@ -29,19 +29,32 @@ async function getUser(telegramId) {
 }
 
 /**
- * Create the user document if it doesn't already exist.
+ * Create the user document if it doesn't already have a full profile.
  * Returns { user, isNew }.
+ *
+ * IMPORTANT: we do NOT just check snap.exists here. forceJoin.js's
+ * markForceJoinRecheck() can create a PARTIAL stub doc (containing only
+ * lastForceJoinCheckAt, via set+merge) for a user whose very first update
+ * wasn't a /start command. If we only checked snap.exists, that stub would
+ * make us think the user was already fully registered and we'd skip
+ * setting name/telegramId/balance/referralCode/referredBy forever - which
+ * silently broke referral tracking (referredBy never saved) and showed
+ * "undefined" everywhere in the UI. Checking for the `balance` field
+ * specifically (only ever set by the full-creation branch below) tells us
+ * whether a REAL profile exists yet.
  */
 async function ensureUser(ctx, referredBy = null) {
   const telegramId = ctx.from.id;
   const ref = usersCol.doc(String(telegramId));
   const snap = await ref.get();
+  const existingData = snap.exists ? snap.data() : null;
+  const hasFullProfile = existingData && existingData.balance !== undefined;
 
-  if (snap.exists) {
+  if (hasFullProfile) {
     if (referredBy) {
       console.log(`[ensureUser] User ${telegramId} already exists - referral payload (referrer ${referredBy}) ignored (not their first /start).`);
     }
-    return { user: { id: snap.id, ...snap.data() }, isNew: false };
+    return { user: { id: snap.id, ...existingData }, isNew: false };
   }
 
   const newUser = {
@@ -62,7 +75,9 @@ async function ensureUser(ctx, referredBy = null) {
     console.log(`[ensureUser] User ${telegramId} tried to refer themselves - blocked.`);
   }
 
-  await ref.set(newUser);
+  // merge:true so we don't clobber a pre-existing partial stub doc's fields
+  // (e.g. lastForceJoinCheckAt) - we just fill in the rest on top of it.
+  await ref.set(newUser, { merge: true });
   console.log(`[ensureUser] Created new user ${telegramId}${newUser.referredBy ? ` (referred by ${newUser.referredBy})` : ''}.`);
 
   // If this user came from a referral, log a referrals/ doc so we can pay
