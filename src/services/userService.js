@@ -38,6 +38,9 @@ async function ensureUser(ctx, referredBy = null) {
   const snap = await ref.get();
 
   if (snap.exists) {
+    if (referredBy) {
+      console.log(`[ensureUser] User ${telegramId} already exists - referral payload (referrer ${referredBy}) ignored (not their first /start).`);
+    }
     return { user: { id: snap.id, ...snap.data() }, isNew: false };
   }
 
@@ -55,16 +58,25 @@ async function ensureUser(ctx, referredBy = null) {
     lastForceJoinCheckAt: null,
   };
 
-  await ref.set(newUser);
+  if (referredBy && referredBy === telegramId) {
+    console.log(`[ensureUser] User ${telegramId} tried to refer themselves - blocked.`);
+  }
 
-  // If this user came from a referral, log a referrals/ doc for the cron job to process later.
+  await ref.set(newUser);
+  console.log(`[ensureUser] Created new user ${telegramId}${newUser.referredBy ? ` (referred by ${newUser.referredBy})` : ''}.`);
+
+  // If this user came from a referral, log a referrals/ doc so we can pay
+  // the referrer out instantly once this user finishes force-join
+  // verification (see forceJoin.js / referralService.tryPayoutReferral).
   if (newUser.referredBy) {
     await db.collection('referrals').doc(String(telegramId)).set({
       referrerId: newUser.referredBy,
       referredId: telegramId,
       joinedAt: admin.firestore.FieldValue.serverTimestamp(),
       rewarded: false,
+      rewardedAt: null,
     });
+    console.log(`[ensureUser] Saved referrals/${telegramId} -> referrerId ${newUser.referredBy}.`);
   }
 
   return { user: newUser, isNew: true };

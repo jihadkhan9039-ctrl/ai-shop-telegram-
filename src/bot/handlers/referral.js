@@ -7,7 +7,6 @@ const { getUser } = require('../../services/userService');
 const { getReferralsByReferrer } = require('../../services/referralService');
 const { taka } = require('../../utils/helpers');
 
-const HOLD_HOURS = Number(process.env.REFERRAL_HOLD_HOURS || 24);
 const BONUS = process.env.REFERRAL_BONUS || '5';
 
 const myReferralsKeyboard = Markup.inlineKeyboard([
@@ -24,8 +23,8 @@ function registerReferralHandler(bot) {
 
     await ctx.reply(
       `👥 *Refer & Earn*\n\n` +
-        `Share your referral link with friends. When they join, verify all channels, ` +
-        `and stay active for ${HOLD_HOURS} hours, you'll automatically earn ${taka(BONUS)}!\n\n` +
+        `Share your referral link with friends. As soon as they join and verify all 4 channels, ` +
+        `you'll instantly earn ${taka(BONUS)}!\n\n` +
         `🔗 Your referral link:\n\`${link}\`\n\n` +
         `💰 Total referral earnings so far: *${taka(user.referralEarnings || 0)}*`,
       { parse_mode: 'Markdown', ...myReferralsKeyboard }
@@ -58,18 +57,9 @@ function registerReferralHandler(bot) {
         } else if (!referredUser || !referredUser.channelsVerifiedAt) {
           status = '⏳ এখনো ৪টা চ্যানেলে জয়েন যাচাই হয়নি';
         } else {
-          const verifiedAtMs = referredUser.channelsVerifiedAt.toMillis
-            ? referredUser.channelsVerifiedAt.toMillis()
-            : new Date(referredUser.channelsVerifiedAt).getTime();
-          const elapsedHours = (Date.now() - verifiedAtMs) / (1000 * 60 * 60);
-          const remainingHours = HOLD_HOURS - elapsedHours;
-          if (remainingHours <= 0) {
-            status = '⏳ যাচাই সম্পন্ন, শীঘ্রই বোনাস আসবে (পরবর্তী ঘণ্টার চেক-এ)';
-          } else if (remainingHours < 1) {
-            status = `⏳ বাকি প্রায় ${Math.ceil(remainingHours * 60)} মিনিট`;
-          } else {
-            status = `⏳ বাকি প্রায় ${Math.ceil(remainingHours)} ঘণ্টা`;
-          }
+          // Verified but not yet rewarded - almost always means the daily
+          // payout cap was hit; the hourly sweep will retry automatically.
+          status = '⏳ যাচাই সম্পন্ন - বোনাস প্রসেসিং হচ্ছে (শীঘ্রই পাবেন)';
         }
 
         return `${i + 1}. ${name}\n   ${status}`;

@@ -3,10 +3,13 @@
  * ------------------------------------------------------------
  * Global middleware. Runs before every update. Blocks all
  * features until the user has joined all 4 required channels.
+ * Also triggers the instant referral payout the first time a
+ * referred user completes verification (see tryPayoutReferral).
  * ------------------------------------------------------------
  */
 
 const { markChannelsVerified, markForceJoinRecheck, getUser } = require('../../services/userService');
+const { tryPayoutReferral } = require('../../services/referralService');
 const { isAdmin } = require('../../utils/helpers');
 
 // Read the 4 channels (chat id or @username) + their public invite links from env.
@@ -68,6 +71,15 @@ async function forceJoinMiddleware(ctx, next) {
   // OTHER message/click still uses the fast TTL cache below for speed.
   const isStartCommand = ctx.message && typeof ctx.message.text === 'string' && /^\/start(\s|$)/.test(ctx.message.text);
 
+  // Fetched once, used both by the fast-path cache check below AND to know
+  // whether this live check (if we get to one) is this user's FIRST ever
+  // successful verification - which is what triggers the instant referral
+  // payout further down.
+  const existingUser = await getUser(userId).catch((e) => {
+    console.error('[forceJoin] getUser failed:', e.message);
+    return null;
+  });
+
   // --- FAST PATH (skipped for /start, see above) ---
   // Re-checking 4 channels via the Telegram API on EVERY single update is
   // slow (especially on low-CPU free hosting). We cache a verified result
@@ -80,7 +92,6 @@ async function forceJoinMiddleware(ctx, next) {
       return next();
     }
 
-    const existingUser = await getUser(userId).catch(() => null);
     const lastCheckMs =
       existingUser && existingUser.lastForceJoinCheckAt && existingUser.lastForceJoinCheckAt.toMillis
         ? existingUser.lastForceJoinCheckAt.toMillis()
@@ -96,12 +107,23 @@ async function forceJoinMiddleware(ctx, next) {
 
   if (notJoined.length === 0) {
     // Fully verified - refresh the rolling re-check timestamp (session +
-    // Firestore) so future updates take the fast path until it expires
-    // again, AND set the one-time channelsVerifiedAt used by referralCron
-    // (only actually written the very first time, see userService.js).
+    // Firestore) so future updates take the fast path until it expires again.
     if (ctx.session) ctx.session.forceJoinVerifiedAt = Date.now();
     markForceJoinRecheck(userId).catch((e) => console.error('markForceJoinRecheck error:', e));
+
+    // Was this the user's FIRST ever successful verification? If so, this is
+    // the moment to (a) permanently record channelsVerifiedAt and (b) try to
+    // instantly pay out whoever referred them.
+    const isFirstEverVerification = !(existingUser && existingUser.channelsVerifiedAt);
     markChannelsVerified(userId).catch((e) => console.error('markChannelsVerified error:', e));
+
+    if (isFirstEverVerification) {
+      console.log(`[forceJoin] User ${userId} verified all channels for the first time - attempting referral payout.`);
+      tryPayoutReferral(userId, ctx.telegram).catch((e) =>
+        console.error('[forceJoin] tryPayoutReferral error:', e)
+      );
+    }
+
     return next();
   }
 

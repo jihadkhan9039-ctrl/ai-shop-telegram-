@@ -5,25 +5,43 @@
  *   referrerId    number
  *   referredId    number
  *   joinedAt      Timestamp   (when the referred user first pressed /start)
- *   rewarded      boolean     (true once the ৳10 bonus has been paid out)
+ *   rewarded      boolean     (true once the bonus has been paid out)
+ *   rewardedAt    Timestamp|null
  * ------------------------------------------------------------
- * The actual "did they stay 24h + verify all channels" check happens in
- * src/jobs/referralCron.js, which reads pending docs from here.
+ * PAYOUT POLICY: the bonus is paid INSTANTLY the moment the referred user
+ * completes force-join verification for the very first time (see
+ * forceJoin.js, which calls tryPayoutReferral() below). There is no
+ * holding period.
+ *
+ * Anti-fraud: instead of a time delay, we cap how many referral bonuses a
+ * single referrer can earn per day (REFERRAL_DAILY_CAP). This blunts mass
+ * fake-account abuse while still paying legitimate referrers instantly.
+ * A referral that hits the cap simply stays unrewarded and is retried by
+ * the hourly cron sweep (see jobs/referralCron.js) once the referrer is
+ * back under the cap the next day.
  * ------------------------------------------------------------
  */
 
-const { db } = require('../config/firebase');
+const { db, admin } = require('../config/firebase');
+const { adjustBalance } = require('./userService');
+const { taka } = require('../utils/helpers');
 
 const referralsCol = db.collection('referrals');
 
-/** All referral records that have not yet been rewarded. */
+const BONUS = Number(process.env.REFERRAL_BONUS || 5);
+const DAILY_CAP = Number(process.env.REFERRAL_DAILY_CAP || 10);
+
+/** All referral records that have not yet been rewarded (used by the cron safety-sweep). */
 async function getPendingReferrals() {
   const snap = await referralsCol.where('rewarded', '==', false).get();
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
 async function markRewarded(referredId) {
-  await referralsCol.doc(String(referredId)).update({ rewarded: true });
+  await referralsCol.doc(String(referredId)).update({
+    rewarded: true,
+    rewardedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
 }
 
 /** All referrals (rewarded or not) made by one specific referrer - for the "My Referrals" view. */
@@ -32,4 +50,79 @@ async function getReferralsByReferrer(referrerId) {
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
 }
 
-module.exports = { getPendingReferrals, markRewarded, getReferralsByReferrer };
+/**
+ * How many referral bonuses this referrer has already been paid TODAY
+ * (server local time). Single-field query (no composite index needed) -
+ * filtering by date happens in memory, which is fine since one referrer's
+ * total referral count is expected to stay small (tens, not thousands).
+ */
+async function countRewardedToday(referrerId) {
+  const snap = await referralsCol.where('referrerId', '==', Number(referrerId)).get();
+  const startOfDay = new Date();
+  startOfDay.setHours(0, 0, 0, 0);
+  const startMs = startOfDay.getTime();
+
+  return snap.docs.filter((d) => {
+    const data = d.data();
+    if (!data.rewarded || !data.rewardedAt) return false;
+    const t = data.rewardedAt.toMillis ? data.rewardedAt.toMillis() : new Date(data.rewardedAt).getTime();
+    return t >= startMs;
+  }).length;
+}
+
+/**
+ * Attempt to instantly pay out the referral bonus for `referredId`'s
+ * referrer, if eligible. Safe to call multiple times (no-ops once
+ * rewarded=true). Call this exactly once, right when a user completes
+ * force-join verification for the first time.
+ *
+ * @param {number} referredId - the user who just got verified
+ * @param {import('telegraf').Telegram} [telegram] - used to notify the referrer; optional
+ */
+async function tryPayoutReferral(referredId, telegram) {
+  const refDoc = await referralsCol.doc(String(referredId)).get();
+  if (!refDoc.exists) {
+    console.log(`[referral] No referral record for user ${referredId} (they weren't referred, or the record failed to save).`);
+    return;
+  }
+
+  const ref = refDoc.data();
+  if (ref.rewarded) {
+    console.log(`[referral] User ${referredId}'s referral was already rewarded, skipping.`);
+    return;
+  }
+
+  const rewardedToday = await countRewardedToday(ref.referrerId);
+  if (rewardedToday >= DAILY_CAP) {
+    console.log(
+      `[referral] Referrer ${ref.referrerId} hit the daily cap (${DAILY_CAP}). ` +
+        `Referral for ${referredId} stays pending - the hourly sweep will retry it.`
+    );
+    return;
+  }
+
+  await adjustBalance(ref.referrerId, BONUS, { referralEarning: true });
+  await markRewarded(referredId);
+  console.log(`[referral] Paid ${BONUS} taka to referrer ${ref.referrerId} for referred user ${referredId}.`);
+
+  if (telegram) {
+    telegram
+      .sendMessage(
+        ref.referrerId,
+        `🎉 রেফারেল বোনাস পেয়েছেন!\n\n` +
+          `আপনার রেফার করা একজন ইউজার সব চ্যানেল জয়েন করে ভেরিফাই সম্পন্ন করেছেন।\n` +
+          `💰 ${taka(BONUS)} আপনার ব্যালেন্সে যোগ হয়েছে।`
+      )
+      .catch((e) => console.error('[referral] failed to notify referrer of payout:', e.message));
+  }
+}
+
+module.exports = {
+  getPendingReferrals,
+  markRewarded,
+  getReferralsByReferrer,
+  countRewardedToday,
+  tryPayoutReferral,
+  BONUS,
+  DAILY_CAP,
+};
