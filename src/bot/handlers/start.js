@@ -42,7 +42,7 @@ function registerStartHandler(bot) {
   // Fired by forceJoin.js once the user is verified and taps "Check Again".
   bot.action('check_join', async (ctx) => {
     await ctx.answerCbQuery('✅ Verified! Welcome aboard.');
-    await getUser(ctx.from.id); // ensures doc exists (should already, from /start)
+    await ensureUser(ctx); // safety net: creates the user doc if it somehow doesn't exist yet
     try {
       await ctx.deleteMessage();
     } catch {
