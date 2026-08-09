@@ -18,7 +18,7 @@ const { registerBalanceHandler } = require('./handlers/balance');
 const { registerShopHandler } = require('./handlers/shop');
 const { registerAdminHandler } = require('./handlers/admin');
 const { ensureUser } = require('../services/userService');
-const { parseReferralCode } = require('../utils/helpers');
+const { parseReferralCode, taka } = require('../utils/helpers');
 
 /**
  * This bot is designed for 1-on-1 private chats only (shop, balance, admin
@@ -51,7 +51,23 @@ async function captureReferralOnStart(ctx, next) {
     const payload = text.replace(/^\/start\s*/, '').trim();
     const referrerId = payload ? parseReferralCode(payload) : null;
     try {
-      await ensureUser(ctx, referrerId);
+      const { user, isNew } = await ensureUser(ctx, referrerId);
+      // Only notify once, right when the referral relationship is first created
+      // (isNew guards against re-notifying on every subsequent /start).
+      if (isNew && user.referredBy) {
+        const referredName = ctx.from.first_name || 'Someone';
+        const holdHours = process.env.REFERRAL_HOLD_HOURS || '24';
+        const bonus = process.env.REFERRAL_BONUS || '5';
+        ctx.telegram
+          .sendMessage(
+            user.referredBy,
+            `🎉 নতুন রেফারেল!\n\n` +
+              `${referredName} আপনার লিংক দিয়ে বটে join করেছেন।\n\n` +
+              `সে যদি ৪টা চ্যানেল জয়েন করে এবং ${holdHours} ঘণ্টা active থাকে, তাহলে আপনি স্বয়ংক্রিয়ভাবে ${taka(bonus)} বোনাস পাবেন।\n\n` +
+              `"👥 Refer & Earn" → "📋 My Referral List" থেকে স্ট্যাটাস দেখতে পারবেন।`
+          )
+          .catch((e) => console.error('[captureReferralOnStart] failed to notify referrer:', e.message));
+      }
     } catch (err) {
       console.error('[captureReferralOnStart] failed to create user/referral record:', err);
     }
