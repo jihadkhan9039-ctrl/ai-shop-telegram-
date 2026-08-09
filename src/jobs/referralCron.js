@@ -5,11 +5,8 @@
  * completes force-join verification (see forceJoin.js -> tryPayoutReferral).
  *
  * This hourly cron is now just a SAFETY-NET SWEEP: it retries any referral
- * that's still unrewarded (most commonly because the referrer had already
- * hit their REFERRAL_DAILY_CAP for the day at the moment their friend
- * verified). Once the referrer is back under the cap, this sweep pays them.
- * It also catches the rare case where the instant payout attempt failed
- * due to a transient error.
+ * that's still unrewarded, which should now only happen in the rare case
+ * where the instant payout attempt failed due to a transient error.
  * ------------------------------------------------------------
  */
 

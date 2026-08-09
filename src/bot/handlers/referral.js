@@ -57,8 +57,9 @@ function registerReferralHandler(bot) {
         } else if (!referredUser || !referredUser.channelsVerifiedAt) {
           status = '⏳ এখনো ৪টা চ্যানেলে জয়েন যাচাই হয়নি';
         } else {
-          // Verified but not yet rewarded - almost always means the daily
-          // payout cap was hit; the hourly sweep will retry automatically.
+          // Verified but not yet rewarded - shouldn't normally happen since
+          // payout is instant, but the hourly sweep will retry just in case
+          // (e.g. a transient error during the instant payout attempt).
           status = '⏳ যাচাই সম্পন্ন - বোনাস প্রসেসিং হচ্ছে (শীঘ্রই পাবেন)';
         }
 

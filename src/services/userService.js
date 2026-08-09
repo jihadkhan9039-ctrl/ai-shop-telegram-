@@ -126,12 +126,6 @@ async function setLastReferralPayoutAt(telegramId) {
   );
 }
 
-/** Records today's date on the user doc so we only alert the admin ONCE per
- *  referrer per day when they hit the daily referral cap (avoids spam). */
-async function markCapAlertSent(telegramId, dateStr) {
-  await usersCol.doc(String(telegramId)).set({ lastCapAlertDate: dateStr }, { merge: true });
-}
-
 /** Return all user documents (used for broadcast). Streams in batches to avoid huge memory spikes. */
 async function* iterateAllUsers(batchSize = 300) {
   let lastDoc = null;
@@ -154,6 +148,5 @@ module.exports = {
   adjustBalance,
   setBanned,
   setLastReferralPayoutAt,
-  markCapAlertSent,
   iterateAllUsers,
 };
