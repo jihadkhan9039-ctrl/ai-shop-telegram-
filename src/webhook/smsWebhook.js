@@ -82,6 +82,16 @@ function parseSms(text) {
 }
 
 router.post('/sms-webhook', express.json(), async (req, res) => {
+  // Log EVERY incoming hit unconditionally, before any auth/parsing logic,
+  // so we can always tell from the Render logs whether a request from the
+  // phone actually reached the server at all (vs failing at the network/
+  // TLS layer before ever arriving here) - and if it did arrive, exactly
+  // why it was rejected (bad secret vs unparseable SMS vs something else).
+  console.log(
+    `[sms-webhook] Incoming request - secret present: ${!!req.headers['x-webhook-secret']}, ` +
+      `content-type: ${req.headers['content-type']}, body: ${JSON.stringify(req.body).slice(0, 300)}`
+  );
+
   // Force a fresh TCP connection for every request instead of letting the
   // client reuse a pooled keep-alive one. Android's OkHttp/Volley (used by
   // most SMS-forwarder apps) pools connections client-side, but this
@@ -98,6 +108,7 @@ router.post('/sms-webhook', express.json(), async (req, res) => {
   // --- Auth: shared-secret header ---
   const secret = req.headers['x-webhook-secret'];
   if (!secret || secret !== process.env.SMS_WEBHOOK_SECRET) {
+    console.warn(`[sms-webhook] Rejected - bad/missing secret. Got: "${secret || '(none)'}"`);
     return res.status(401).json({ ok: false, error: 'Unauthorized' });
   }
 
