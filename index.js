@@ -66,6 +66,27 @@ async function main() {
   const port = process.env.PORT || 3000;
   app.listen(port, () => console.log(`🌐 Express server listening on port ${port}`));
 
+  // ---- Keep-alive self-ping (Render free tier spins the service down
+  // after ~15 min with no incoming HTTP requests, causing a 30-60s cold
+  // start on the next request. Telegram long-polling is OUTBOUND traffic
+  // and does NOT count, so without this the bot itself won't keep the
+  // Express server awake - the very next SMS webhook hit after a quiet
+  // spell would then time out on the SMS-forwarder app's side and show
+  // as "Failed", even though the SMS was actually valid and would have
+  // been saved fine once the cold start finished. Pinging our own health
+  // check route every 10 minutes prevents the spin-down entirely. Only
+  // useful once the service already has a public URL, i.e. on Render -
+  // harmless no-op locally since RENDER_EXTERNAL_URL won't be set. ----
+  const selfUrl = process.env.RENDER_EXTERNAL_URL;
+  if (selfUrl) {
+    setInterval(() => {
+      require('https')
+        .get(selfUrl, (res) => res.resume())
+        .on('error', (err) => console.warn('[keep-alive] self-ping failed:', err.message));
+    }, 10 * 60 * 1000);
+    console.log(`💓 Keep-alive self-ping enabled for ${selfUrl} (every 10 min).`);
+  }
+
   // ---- Telegram bot ----
   const bot = createBot();
   await launchBotWithRetry(bot);
