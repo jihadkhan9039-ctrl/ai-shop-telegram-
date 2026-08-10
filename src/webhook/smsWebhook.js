@@ -82,6 +82,19 @@ function parseSms(text) {
 }
 
 router.post('/sms-webhook', express.json(), async (req, res) => {
+  // Force a fresh TCP connection for every request instead of letting the
+  // client reuse a pooled keep-alive one. Android's OkHttp/Volley (used by
+  // most SMS-forwarder apps) pools connections client-side, but this
+  // endpoint only gets hit sporadically (whenever an SMS arrives - could be
+  // minutes or hours apart). If Render's proxy closes an idle backend
+  // connection before the app's pool expires it, the app tries to reuse a
+  // now-dead socket and gets NO response at all - which shows up on the
+  // phone as "java.io.IOException: unexpected end of stream" / NoConnectionError,
+  // even though the SMS itself was perfectly valid and nothing on our side
+  // ever went wrong. Telling the client to close the connection after this
+  // response guarantees the NEXT SMS always opens a brand-new connection.
+  res.set('Connection', 'close');
+
   // --- Auth: shared-secret header ---
   const secret = req.headers['x-webhook-secret'];
   if (!secret || secret !== process.env.SMS_WEBHOOK_SECRET) {
