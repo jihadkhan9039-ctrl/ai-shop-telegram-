@@ -95,5 +95,24 @@ module.exports = {
   markRewarded,
   getReferralsByReferrer,
   tryPayoutReferral,
+  getReferralStats,
   BONUS,
 };
+
+/**
+ * Cheap referral overview for the /status admin command. Total payout is
+ * derived as (rewarded count * BONUS) rather than summed field-by-field,
+ * since BONUS is fixed per referral - avoids downloading every doc.
+ */
+async function getReferralStats() {
+  const [totalSnap, rewardedSnap] = await Promise.all([
+    referralsCol.count().get(),
+    referralsCol.where('rewarded', '==', true).count().get(),
+  ]);
+  const rewardedCount = rewardedSnap.data().count;
+  return {
+    totalReferrals: totalSnap.data().count,
+    rewardedReferrals: rewardedCount,
+    totalPayout: rewardedCount * BONUS,
+  };
+}

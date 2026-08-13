@@ -155,6 +155,35 @@ async function* iterateAllUsers(batchSize = 300) {
   }
 }
 
+/**
+ * Cheap counts for the /status admin command. Uses Firestore's server-side
+ * count() aggregation (a single small billed read regardless of collection
+ * size) instead of downloading every user doc just to count them.
+ */
+async function getUserStats() {
+  const now = new Date();
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+  const startOfWeek = new Date(startOfDay);
+  startOfWeek.setDate(startOfWeek.getDate() - 6); // last 7 days incl. today
+
+  const [totalSnap, bannedSnap, todaySnap, weekSnap, verifiedSnap] = await Promise.all([
+    usersCol.count().get(),
+    usersCol.where('banned', '==', true).count().get(),
+    usersCol.where('joinedAt', '>=', startOfDay).count().get(),
+    usersCol.where('joinedAt', '>=', startOfWeek).count().get(),
+    usersCol.where('channelsVerifiedAt', '!=', null).count().get(),
+  ]);
+
+  return {
+    totalUsers: totalSnap.data().count,
+    bannedUsers: bannedSnap.data().count,
+    newToday: todaySnap.data().count,
+    newThisWeek: weekSnap.data().count,
+    verifiedUsers: verifiedSnap.data().count,
+  };
+}
+
 module.exports = {
   getUser,
   ensureUser,
@@ -164,4 +193,5 @@ module.exports = {
   setBanned,
   setLastReferralPayoutAt,
   iterateAllUsers,
+  getUserStats,
 };

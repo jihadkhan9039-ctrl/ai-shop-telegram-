@@ -18,6 +18,7 @@
 const { Markup } = require('telegraf');
 const shopService = require('../../services/shopService');
 const userService = require('../../services/userService');
+const referralService = require('../../services/referralService');
 const { taka, isAdmin } = require('../../utils/helpers');
 
 // ---------- keyboards ----------
@@ -62,6 +63,59 @@ function registerAdminHandler(bot) {
       { parse_mode: 'Markdown' }
     );
   }));
+
+  // /status - full bot overview: users, sales, referrals, services. Runs a
+  // handful of Firestore count()/select() queries in parallel (see
+  // getUserStats/getSalesStats/getReferralStats) - cheap regardless of how
+  // large the collections grow, since count() is a server-side aggregation
+  // rather than downloading every document.
+  bot.command('status', adminOnly(async (ctx) => {
+    const waitMsg = await ctx.reply('⏳ Gathering stats...');
+    try {
+      const [userStats, salesStats, referralStats, services] = await Promise.all([
+        userService.getUserStats(),
+        shopService.getSalesStats(),
+        referralService.getReferralStats(),
+        shopService.getAllServices(),
+      ]);
+
+      const activeServices = services.filter((s) => s.active).length;
+      const totalStock = await getTotalStockCount(services);
+
+      const text =
+        `📊 *Bot Status*\n\n` +
+        `👥 *Users*\n` +
+        `Total: *${userStats.totalUsers}*\n` +
+        `New today: *${userStats.newToday}*  |  Last 7 days: *${userStats.newThisWeek}*\n` +
+        `Verified (joined channels): *${userStats.verifiedUsers}*\n` +
+        `Banned: *${userStats.bannedUsers}*\n\n` +
+        `🛒 *Sales*\n` +
+        `Total orders: *${salesStats.totalOrders}*  |  Today: *${salesStats.ordersToday}*\n` +
+        `Total revenue: *${taka(salesStats.totalRevenue)}*\n\n` +
+        `👫 *Referrals*\n` +
+        `Total referred: *${referralStats.totalReferrals}*\n` +
+        `Rewarded: *${referralStats.rewardedReferrals}*\n` +
+        `Paid out: *${taka(referralStats.totalPayout)}*\n\n` +
+        `📦 *Catalog*\n` +
+        `Services: *${activeServices}/${services.length}* active\n` +
+        `Stock items available: *${totalStock}*`;
+
+      await ctx.telegram.editMessageText(ctx.chat.id, waitMsg.message_id, undefined, text, { parse_mode: 'Markdown' });
+    } catch (err) {
+      console.error('[status] Failed to gather stats:', err);
+      await ctx.telegram.editMessageText(ctx.chat.id, waitMsg.message_id, undefined, '❌ Failed to gather stats. Check logs.');
+    }
+  }));
+
+  /** Sum stockCount across every plan of every service - one extra read per service (small n). */
+  async function getTotalStockCount(services) {
+    let total = 0;
+    for (const service of services) {
+      const plans = await shopService.getAllPlans(service.id);
+      total += plans.reduce((sum, p) => sum + (p.stockCount || 0), 0);
+    }
+    return total;
+  }
 
   bot.action('adm_menu', adminOnly(async (ctx) => {
     await ctx.answerCbQuery();

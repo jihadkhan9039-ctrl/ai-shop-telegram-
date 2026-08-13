@@ -220,4 +220,35 @@ module.exports = {
   addStockSingle,
   popStock,
   recordOrder,
+  getSalesStats,
 };
+
+/**
+ * Cheap sales overview for the /status admin command.
+ * Order count comes from Firestore's server-side count() aggregation (one
+ * small billed read regardless of collection size). Revenue is summed
+ * in-memory since it's just the `price` field on each order doc - fine for
+ * a single shop's order history (no pagination needed at this scale; if
+ * orders ever grow into the tens of thousands this should switch to a
+ * running total maintained on write instead).
+ */
+async function getSalesStats() {
+  const ordersCol = db.collection('orders');
+  const now = new Date();
+  const startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  const [totalCountSnap, todaySnap, allOrdersSnap] = await Promise.all([
+    ordersCol.count().get(),
+    ordersCol.where('createdAt', '>=', startOfDay).count().get(),
+    ordersCol.select('price').get(),
+  ]);
+
+  const totalRevenue = allOrdersSnap.docs.reduce((sum, d) => sum + (Number(d.data().price) || 0), 0);
+
+  return {
+    totalOrders: totalCountSnap.data().count,
+    ordersToday: todaySnap.data().count,
+    totalRevenue,
+  };
+}
