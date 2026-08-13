@@ -343,6 +343,16 @@ function registerAdminHandler(bot) {
       if (!plan) return showServiceDetail(ctx, serviceId);
       const items = await shopService.getStockItems(serviceId, planId, 30);
 
+      // Stash serviceId/planId in session instead of cramming them into
+      // every delete button's callback_data. Telegram caps callback_data
+      // at 64 BYTES total - "adm_delstock_" + a Firestore auto-ID for
+      // serviceId + planId + stockId (each ~20 chars) blows past that and
+      // Telegram silently rejects the whole sendMessage with
+      // "BUTTON_DATA_INVALID". Keeping just the stockId in the button
+      // (~33 bytes) and reading serviceId/planId back from session on tap
+      // stays well under the limit.
+      ctx.session.stockListContext = { serviceId, planId };
+
       if (items.length === 0) {
         return ctx.editMessageText(
           `📋 *${plan.title}* - stock is empty.`,
@@ -357,7 +367,7 @@ function registerAdminHandler(bot) {
       // whole list.
       const rows = items.map((item, i) => {
         const preview = (item.credential || '(empty item)').split('\n')[0].slice(0, 40);
-        return [Markup.button.callback(`🗑 ${i + 1}. ${preview}`, `adm_delstock_${serviceId}_${planId}_${item.id}`)];
+        return [Markup.button.callback(`🗑 ${i + 1}. ${preview}`, `adm_delstock_${item.id}`)];
       });
       rows.push([Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]);
 
@@ -375,8 +385,17 @@ function registerAdminHandler(bot) {
     }
   }
 
-  bot.action(/^adm_delstock_(.+)_(.+)_(.+)$/, adminOnly(async (ctx) => {
-    const [, serviceId, planId, stockId] = ctx.match;
+  bot.action(/^adm_delstock_(.+)$/, adminOnly(async (ctx) => {
+    const stockId = ctx.match[1];
+    const context = ctx.session.stockListContext;
+    if (!context) {
+      // Session context can be missing if the bot restarted (in-memory
+      // session, see bot.js) since this list was opened - just ask the
+      // admin to reopen it rather than crash.
+      await ctx.answerCbQuery('Session expired, please reopen the stock list.');
+      return;
+    }
+    const { serviceId, planId } = context;
     await shopService.removeStockItem(serviceId, planId, stockId);
     await ctx.answerCbQuery('Item removed.');
     await showStockList(ctx, serviceId, planId);
