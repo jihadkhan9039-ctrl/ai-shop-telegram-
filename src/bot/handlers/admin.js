@@ -460,7 +460,7 @@ function registerAdminHandler(bot) {
         // (&, <, >) - Markdown/MarkdownV2 have far more reserved characters
         // and a stray one in the admin's message would make the whole send
         // fail with a "can't parse entities" error.
-        const BROADCAST_HEADER = '📢 <b>এডমিন মেসেজ</b>';
+        const BROADCAST_HEADER = '📢 <b>Admin Message</b>';
 
         for await (const user of userService.iterateAllUsers()) {
           try {
