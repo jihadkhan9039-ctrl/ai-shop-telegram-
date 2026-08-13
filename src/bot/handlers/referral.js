@@ -5,7 +5,7 @@
 const { Markup } = require('telegraf');
 const { getUser } = require('../../services/userService');
 const { getReferralsByReferrer, getTopReferrers } = require('../../services/referralService');
-const { taka } = require('../../utils/helpers');
+const { taka, escapeHtml } = require('../../utils/helpers');
 
 const BONUS = process.env.REFERRAL_BONUS || '5';
 
@@ -50,7 +50,9 @@ function registerReferralHandler(bot) {
     const lines = await Promise.all(
       referrals.map(async (ref, i) => {
         const referredUser = await getUser(ref.referredId).catch(() => null);
-        const name = referredUser ? referredUser.name || `User ${ref.referredId}` : `User ${ref.referredId} (deleted)`;
+        const rawName = referredUser ? referredUser.name || `User ${ref.referredId}` : `User ${ref.referredId} (deleted)`;
+        // tg://user?id=... opens that person's profile/chat directly when tapped.
+        const name = `<a href="tg://user?id=${ref.referredId}">${escapeHtml(rawName)}</a>`;
 
         let status;
         if (ref.rewarded) {
@@ -70,9 +72,13 @@ function registerReferralHandler(bot) {
 
     const rewardedCount = referrals.filter((r) => r.rewarded).length;
 
+    // HTML parse_mode (not plain text) so the tg://user link above actually
+    // renders as a tappable mention - escapeHtml() on the name keeps a
+    // stray < or & in someone's Telegram display name from breaking it.
     await ctx.reply(
       `📋 আপনার রেফারেল লিস্ট (মোট ${referrals.length} জন, বোনাস পাওয়া গেছে ${rewardedCount} জন থেকে)\n\n` +
-        lines.join('\n\n')
+        lines.join('\n\n'),
+      { parse_mode: 'HTML' }
     );
   });
 
@@ -88,16 +94,16 @@ function registerReferralHandler(bot) {
     const lines = await Promise.all(
       top.map(async (entry, i) => {
         const referrer = await getUser(entry.referrerId).catch(() => null);
-        const name = referrer ? referrer.name || `User ${entry.referrerId}` : `User ${entry.referrerId}`;
+        const rawName = referrer ? referrer.name || `User ${entry.referrerId}` : `User ${entry.referrerId}`;
+        const name = `<a href="tg://user?id=${entry.referrerId}">${escapeHtml(rawName)}</a>`;
         return `${medals[i]} ${name} - ${entry.count} জন রেফার`;
       })
     );
 
-    // Plain text (no parse_mode) - a referrer's display name is
-    // user-controlled and could contain characters that break Markdown
-    // parsing (e.g. an unmatched * or _), which would make sendMessage
-    // fail outright. Same reasoning as the "My Referral List" reply above.
-    await ctx.reply(`🏆 Top ৫ রেফারার\n\n${lines.join('\n')}`);
+    // HTML parse_mode so the tg://user mentions render as tappable links;
+    // names are escaped via escapeHtml() above so special characters in a
+    // display name can't break parsing.
+    await ctx.reply(`🏆 Top ৫ রেফারার\n\n${lines.join('\n')}`, { parse_mode: 'HTML' });
   });
 }
 

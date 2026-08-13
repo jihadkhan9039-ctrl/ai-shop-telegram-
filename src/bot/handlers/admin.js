@@ -146,7 +146,9 @@ function registerAdminHandler(bot) {
       orders.map(async (o, i) => {
         const buyer = await userService.getUser(o.userId).catch(() => null);
         const buyerName = escapeHtml(buyer ? buyer.name || 'Unknown' : 'Unknown');
-        const buyerLabel = `${buyerName} (ID: ${o.userId})`;
+        // tg://user?id=... opens that user's profile/chat directly when
+        // tapped - works for any Telegram user ID, no prior contact needed.
+        const buyerLabel = `<a href="tg://user?id=${o.userId}">${buyerName}</a> (ID: ${o.userId})`;
         const service = escapeHtml(o.serviceName || '');
         const plan = escapeHtml(o.planTitle || '');
         const when = o.createdAt && o.createdAt.toDate ? o.createdAt.toDate().toLocaleString('en-GB', { timeZone: 'Asia/Dhaka' }) : 'unknown time';
@@ -319,12 +321,54 @@ function registerAdminHandler(bot) {
         ...Markup.inlineKeyboard([
           [Markup.button.callback('➕ Add Single Item', `adm_addstock1_${serviceId}_${planId}`)],
           [Markup.button.callback('➕ Add Bulk (One Per Line)', `adm_addstockbulk_${serviceId}_${planId}`)],
+          [Markup.button.callback('📋 View / Remove Stock', `adm_stocklist_${serviceId}_${planId}`)],
           [Markup.button.callback(plan.description ? '✏️ Edit Description' : '✏️ Add Description', `adm_editdesc_plan_${serviceId}_${planId}`)],
           [Markup.button.callback('🗑 Delete Plan', `adm_delplan_${serviceId}_${planId}`)],
           [Markup.button.callback('⬅️ Back', `adm_svc_${serviceId}`)],
         ]),
       }
     );
+  }));
+
+  // ---------------- View / remove individual stock items ----------------
+  bot.action(/^adm_stocklist_(.+)_(.+)$/, adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const [, serviceId, planId] = ctx.match;
+    await showStockList(ctx, serviceId, planId);
+  }));
+
+  async function showStockList(ctx, serviceId, planId) {
+    const plan = await shopService.getPlan(serviceId, planId);
+    if (!plan) return showServiceDetail(ctx, serviceId);
+    const items = await shopService.getStockItems(serviceId, planId, 30);
+
+    if (items.length === 0) {
+      return ctx.editMessageText(
+        `📋 *${plan.title}* - stock is empty.`,
+        { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]]) }
+      );
+    }
+
+    // One button per item, labeled with a short preview of the credential
+    // (Telegram truncates long button labels anyway) - tap it to remove
+    // that exact item from stock.
+    const rows = items.map((item, i) => {
+      const preview = item.credential.split('\n')[0].slice(0, 40);
+      return [Markup.button.callback(`🗑 ${i + 1}. ${preview}`, `adm_delstock_${serviceId}_${planId}_${item.id}`)];
+    });
+    rows.push([Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]);
+
+    await ctx.editMessageText(
+      `📋 *${plan.title}* - ${items.length} item(s) in stock.\n\nTap an item to remove it.`,
+      { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }
+    );
+  }
+
+  bot.action(/^adm_delstock_(.+)_(.+)_(.+)$/, adminOnly(async (ctx) => {
+    const [, serviceId, planId, stockId] = ctx.match;
+    await shopService.removeStockItem(serviceId, planId, stockId);
+    await ctx.answerCbQuery('Item removed.');
+    await showStockList(ctx, serviceId, planId);
   }));
 
   bot.action(/^adm_editdesc_plan_(.+)_(.+)$/, adminOnly(async (ctx) => {

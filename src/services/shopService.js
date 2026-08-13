@@ -222,7 +222,32 @@ module.exports = {
   recordOrder,
   getSalesStats,
   getRecentOrders,
+  getStockItems,
+  removeStockItem,
 };
+
+/**
+ * List stock items for a plan (admin "view/remove stock" screen). Capped
+ * at `limit` items - a plan's live stock is expected to stay in the tens,
+ * not thousands, since it's meant to be topped up regularly, so no
+ * pagination cursor is implemented here (unlike orders).
+ */
+async function getStockItems(serviceId, planId, limit = 30) {
+  const snap = await servicesCol.doc(serviceId).collection('plans').doc(planId).collection('stock').orderBy('addedAt').limit(limit).get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+/** Remove one specific stock item (e.g. a credential the admin knows is bad/already used elsewhere), keeping stockCount in sync. */
+async function removeStockItem(serviceId, planId, stockId) {
+  const planRef = servicesCol.doc(serviceId).collection('plans').doc(planId);
+  const stockRef = planRef.collection('stock').doc(stockId);
+  await db.runTransaction(async (tx) => {
+    const stockSnap = await tx.get(stockRef);
+    if (!stockSnap.exists) return;
+    tx.delete(stockRef);
+    tx.update(planRef, { stockCount: admin.firestore.FieldValue.increment(-1) });
+  });
+}
 
 /**
  * Paginated order history for the admin "📦 Recent Orders" view (who
