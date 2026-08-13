@@ -96,6 +96,7 @@ module.exports = {
   getReferralsByReferrer,
   tryPayoutReferral,
   getReferralStats,
+  getTopReferrers,
   BONUS,
 };
 
@@ -115,4 +116,27 @@ async function getReferralStats() {
     rewardedReferrals: rewardedCount,
     totalPayout: rewardedCount * BONUS,
   };
+}
+
+/**
+ * Leaderboard for the "🏆 Top Referrals" button. Reads every REWARDED
+ * referral doc and counts them per referrer in memory, then returns the
+ * top N. There's no per-user running counter to query instead (yet), so
+ * this is O(rewarded referrals) - perfectly fine at this bot's scale, and
+ * it correctly reflects full history with no backfill/migration needed.
+ * If the referrals collection ever grows very large, switch to a
+ * `referralCount` field maintained on each user doc via increment() at
+ * payout time and query that with orderBy+limit instead.
+ */
+async function getTopReferrers(limit = 5) {
+  const snap = await referralsCol.where('rewarded', '==', true).get();
+  const counts = {};
+  snap.docs.forEach((d) => {
+    const referrerId = d.data().referrerId;
+    counts[referrerId] = (counts[referrerId] || 0) + 1;
+  });
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([referrerId, count]) => ({ referrerId: Number(referrerId), count }));
 }

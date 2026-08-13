@@ -4,13 +4,14 @@
 
 const { Markup } = require('telegraf');
 const { getUser } = require('../../services/userService');
-const { getReferralsByReferrer } = require('../../services/referralService');
+const { getReferralsByReferrer, getTopReferrers } = require('../../services/referralService');
 const { taka } = require('../../utils/helpers');
 
 const BONUS = process.env.REFERRAL_BONUS || '5';
 
 const myReferralsKeyboard = Markup.inlineKeyboard([
   [Markup.button.callback('📋 My Referral List', 'my_referrals')],
+  [Markup.button.callback('🏆 Top Referrals', 'top_referrals')],
 ]);
 
 function registerReferralHandler(bot) {
@@ -73,6 +74,30 @@ function registerReferralHandler(bot) {
       `📋 আপনার রেফারেল লিস্ট (মোট ${referrals.length} জন, বোনাস পাওয়া গেছে ${rewardedCount} জন থেকে)\n\n` +
         lines.join('\n\n')
     );
+  });
+
+  bot.action('top_referrals', async (ctx) => {
+    await ctx.answerCbQuery();
+    const top = await getTopReferrers(5);
+
+    if (top.length === 0) {
+      return ctx.reply('🏆 এখনো কেউ সফলভাবে কাউকে রেফার করেননি। প্রথম হওয়ার সুযোগ আপনার!');
+    }
+
+    const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+    const lines = await Promise.all(
+      top.map(async (entry, i) => {
+        const referrer = await getUser(entry.referrerId).catch(() => null);
+        const name = referrer ? referrer.name || `User ${entry.referrerId}` : `User ${entry.referrerId}`;
+        return `${medals[i]} ${name} - ${entry.count} জন রেফার`;
+      })
+    );
+
+    // Plain text (no parse_mode) - a referrer's display name is
+    // user-controlled and could contain characters that break Markdown
+    // parsing (e.g. an unmatched * or _), which would make sendMessage
+    // fail outright. Same reasoning as the "My Referral List" reply above.
+    await ctx.reply(`🏆 Top ৫ রেফারার\n\n${lines.join('\n')}`);
   });
 }
 
