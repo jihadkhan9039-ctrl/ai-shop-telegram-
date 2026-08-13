@@ -221,7 +221,25 @@ module.exports = {
   popStock,
   recordOrder,
   getSalesStats,
+  getRecentOrders,
 };
+
+/**
+ * Paginated order history for the admin "📦 Recent Orders" view (who
+ * bought what, when, for how much). Cursor-based (not offset-based) so
+ * paging deep into history stays cheap - Firestore's startAfter() jumps
+ * straight to the right spot instead of re-scanning every prior page.
+ * Pass the `createdAt` millis of the last order on the current page as
+ * `beforeMillis` to fetch the next page.
+ */
+async function getRecentOrders(limit = 10, beforeMillis = null) {
+  let query = db.collection('orders').orderBy('createdAt', 'desc').limit(limit);
+  if (beforeMillis) {
+    query = query.startAfter(admin.firestore.Timestamp.fromMillis(beforeMillis));
+  }
+  const snap = await query.get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
 
 /**
  * Cheap sales overview for the /status admin command.

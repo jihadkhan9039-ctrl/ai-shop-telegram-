@@ -26,6 +26,7 @@ const { taka, isAdmin, escapeHtml } = require('../../utils/helpers');
 const adminMenu = Markup.inlineKeyboard([
   [Markup.button.callback('➕ Add Service', 'adm_add_service')],
   [Markup.button.callback('🗂 Manage Services & Plans', 'adm_services')],
+  [Markup.button.callback('📦 Recent Orders', 'adm_orders')],
   [Markup.button.callback('💰 Manage User Balance', 'adm_balance')],
   [Markup.button.callback('🚫 Ban / Unban User', 'adm_ban')],
   [Markup.button.callback('📢 Broadcast Message', 'adm_broadcast')],
@@ -121,6 +122,69 @@ function registerAdminHandler(bot) {
     await ctx.answerCbQuery();
     ctx.session.adminState = null;
     await ctx.editMessageText('🛠 *Admin Panel*', { parse_mode: 'Markdown', ...adminMenu });
+  }));
+
+  // ---------------- Recent Orders (who bought what) ----------------
+  const ORDERS_PAGE_SIZE = 10;
+
+  async function renderOrdersPage(beforeMillis) {
+    const orders = await shopService.getRecentOrders(ORDERS_PAGE_SIZE, beforeMillis);
+
+    if (orders.length === 0) {
+      return { text: beforeMillis ? '📦 No more orders.' : '📦 No orders yet.', keyboard: Markup.inlineKeyboard([backToMenuRow()]) };
+    }
+
+    // One extra Firestore read per order to show the buyer's name - fine
+    // at 10 orders/page. Falls back to just the Telegram ID if the user
+    // doc is somehow missing (e.g. account deleted since the order).
+    // Everything interpolated here is user/admin-typed free text (buyer's
+    // Telegram name, service/plan titles), so it's HTML-escaped and sent
+    // with parse_mode 'HTML' rather than Markdown - a stray */_/[ in
+    // someone's display name would otherwise break Markdown parsing and
+    // make the whole message fail to send.
+    const lines = await Promise.all(
+      orders.map(async (o, i) => {
+        const buyer = await userService.getUser(o.userId).catch(() => null);
+        const buyerName = escapeHtml(buyer ? buyer.name || 'Unknown' : 'Unknown');
+        const buyerLabel = `${buyerName} (ID: ${o.userId})`;
+        const service = escapeHtml(o.serviceName || '');
+        const plan = escapeHtml(o.planTitle || '');
+        const when = o.createdAt && o.createdAt.toDate ? o.createdAt.toDate().toLocaleString('en-GB', { timeZone: 'Asia/Dhaka' }) : 'unknown time';
+        return (
+          `${i + 1}. 👤 ${buyerLabel}\n` +
+          `   🛒 ${service} - ${plan}  |  ${taka(o.price)}\n` +
+          `   🕒 ${when}`
+        );
+      })
+    );
+
+    const lastCreatedAt = orders[orders.length - 1].createdAt;
+    const lastMillis = lastCreatedAt && lastCreatedAt.toMillis ? lastCreatedAt.toMillis() : null;
+    const hasMore = orders.length === ORDERS_PAGE_SIZE;
+
+    const buttons = [];
+    if (hasMore && lastMillis) buttons.push([Markup.button.callback('➡️ Next Page', `adm_orders_${lastMillis}`)]);
+    buttons.push(backToMenuRow());
+
+    return { text: `📦 <b>Recent Orders</b>\n\n${lines.join('\n\n')}`, keyboard: Markup.inlineKeyboard(buttons) };
+  }
+
+  bot.command('orders', adminOnly(async (ctx) => {
+    const { text, keyboard } = await renderOrdersPage(null);
+    await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+  }));
+
+  bot.action('adm_orders', adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const { text, keyboard } = await renderOrdersPage(null);
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+  }));
+
+  bot.action(/^adm_orders_(\d+)$/, adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const beforeMillis = Number(ctx.match[1]);
+    const { text, keyboard } = await renderOrdersPage(beforeMillis);
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
   }));
 
   // ---------------- Add Service ----------------
