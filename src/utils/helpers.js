@@ -27,6 +27,13 @@ function escapeMarkdown(text = '') {
   return String(text).replace(/[_*[\]()~`>#+\-=|{}.!\\]/g, '\\$&');
 }
 
+/** Escape the handful of characters HTML parse_mode treats specially, so
+ *  arbitrary user/admin-typed free text can be safely wrapped in tags
+ *  like <b>...</b> without risking a "can't parse entities" API error. */
+function escapeHtml(text = '') {
+  return String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 /** Split an array into chunks (used to lay out inline keyboards in rows) */
 function chunk(arr, size) {
   const out = [];
@@ -44,6 +51,7 @@ module.exports = {
   generateReferralCode,
   parseReferralCode,
   escapeMarkdown,
+  escapeHtml,
   chunk,
   isAdmin,
 };

@@ -19,7 +19,7 @@ const { Markup } = require('telegraf');
 const shopService = require('../../services/shopService');
 const userService = require('../../services/userService');
 const referralService = require('../../services/referralService');
-const { taka, isAdmin } = require('../../utils/helpers');
+const { taka, isAdmin, escapeHtml } = require('../../utils/helpers');
 
 // ---------- keyboards ----------
 
@@ -452,9 +452,38 @@ function registerAdminHandler(bot) {
         await ctx.reply('📢 Broadcasting... this may take a while for large user bases.');
         let sent = 0;
         let failed = 0;
+
+        // Label every broadcast so users can immediately tell it's an
+        // official admin announcement rather than a regular bot message,
+        // and render the admin's own text in bold. HTML parse_mode is used
+        // (not Markdown) because it only needs 3 characters escaped
+        // (&, <, >) - Markdown/MarkdownV2 have far more reserved characters
+        // and a stray one in the admin's message would make the whole send
+        // fail with a "can't parse entities" error.
+        const BROADCAST_HEADER = '📢 <b>এডমিন মেসেজ</b>';
+
         for await (const user of userService.iterateAllUsers()) {
           try {
-            await ctx.telegram.copyMessage(user.telegramId, ctx.chat.id, ctx.message.message_id);
+            if (ctx.message.text) {
+              // Plain text broadcast: send fresh (not a copy) so we can
+              // wrap it with the header + bold formatting.
+              const body = `${BROADCAST_HEADER}\n\n<b>${escapeHtml(ctx.message.text)}</b>`;
+              await ctx.telegram.sendMessage(user.telegramId, body, { parse_mode: 'HTML' });
+            } else {
+              // Photo/video/document/etc: copyMessage can't reformat the
+              // message body itself, but its `caption` + `parse_mode`
+              // options DO let us override just the caption - so the media
+              // still gets copied normally, with our bold header prepended
+              // to whatever caption (if any) the admin originally wrote.
+              const originalCaption = ctx.message.caption || '';
+              const caption = originalCaption
+                ? `${BROADCAST_HEADER}\n\n<b>${escapeHtml(originalCaption)}</b>`
+                : BROADCAST_HEADER;
+              await ctx.telegram.copyMessage(user.telegramId, ctx.chat.id, ctx.message.message_id, {
+                caption,
+                parse_mode: 'HTML',
+              });
+            }
             sent += 1;
           } catch {
             failed += 1;
