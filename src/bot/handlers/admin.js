@@ -355,25 +355,27 @@ function registerAdminHandler(bot) {
 
       if (items.length === 0) {
         return ctx.editMessageText(
-          `📋 *${plan.title}* - stock is empty.`,
-          { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]]) }
+          `📋 <b>${escapeHtml(plan.title)}</b> - stock is empty.`,
+          { parse_mode: 'HTML', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]]) }
         );
       }
 
-      // One button per item, labeled with a short preview of the credential
-      // (Telegram truncates long button labels anyway) - tap it to remove
-      // that exact item from stock. Guard against a malformed/legacy stock
-      // doc missing the `credential` field so one bad item can't break the
-      // whole list.
-      const rows = items.map((item, i) => {
-        const preview = (item.credential || '(empty item)').split('\n')[0].slice(0, 40);
-        return [Markup.button.callback(`🗑 ${i + 1}. ${preview}`, `adm_delstock_${item.id}`)];
+      // Telegram button LABELS get truncated well before the credential
+      // text would be readable, so the full credential goes in the
+      // MESSAGE BODY instead (wrapped in <code> for a monospaced,
+      // easy-to-read/copy block) - only the message text has real room
+      // (4096 chars). Buttons stay short ("Remove #1") and only need to
+      // carry the stockId.
+      const itemBlocks = items.map((item, i) => {
+        const credential = escapeHtml(item.credential || '(empty item)');
+        return `<b>${i + 1}.</b>\n<code>${credential}</code>`;
       });
+      const rows = items.map((item, i) => [Markup.button.callback(`🗑 Remove #${i + 1}`, `adm_delstock_${item.id}`)]);
       rows.push([Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]);
 
       await ctx.editMessageText(
-        `📋 *${plan.title}* - ${items.length} item(s) in stock.\n\nTap an item to remove it.`,
-        { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }
+        `📋 <b>${escapeHtml(plan.title)}</b> - ${items.length} item(s) in stock.\n\n${itemBlocks.join('\n\n')}`,
+        { parse_mode: 'HTML', ...Markup.inlineKeyboard(rows) }
       );
     } catch (err) {
       // Surface the actual error to the admin instead of failing silently
