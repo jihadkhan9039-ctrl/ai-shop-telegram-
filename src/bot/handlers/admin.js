@@ -338,30 +338,41 @@ function registerAdminHandler(bot) {
   }));
 
   async function showStockList(ctx, serviceId, planId) {
-    const plan = await shopService.getPlan(serviceId, planId);
-    if (!plan) return showServiceDetail(ctx, serviceId);
-    const items = await shopService.getStockItems(serviceId, planId, 30);
+    try {
+      const plan = await shopService.getPlan(serviceId, planId);
+      if (!plan) return showServiceDetail(ctx, serviceId);
+      const items = await shopService.getStockItems(serviceId, planId, 30);
 
-    if (items.length === 0) {
-      return ctx.editMessageText(
-        `📋 *${plan.title}* - stock is empty.`,
-        { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]]) }
+      if (items.length === 0) {
+        return ctx.editMessageText(
+          `📋 *${plan.title}* - stock is empty.`,
+          { parse_mode: 'Markdown', ...Markup.inlineKeyboard([[Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]]) }
+        );
+      }
+
+      // One button per item, labeled with a short preview of the credential
+      // (Telegram truncates long button labels anyway) - tap it to remove
+      // that exact item from stock. Guard against a malformed/legacy stock
+      // doc missing the `credential` field so one bad item can't break the
+      // whole list.
+      const rows = items.map((item, i) => {
+        const preview = (item.credential || '(empty item)').split('\n')[0].slice(0, 40);
+        return [Markup.button.callback(`🗑 ${i + 1}. ${preview}`, `adm_delstock_${serviceId}_${planId}_${item.id}`)];
+      });
+      rows.push([Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]);
+
+      await ctx.editMessageText(
+        `📋 *${plan.title}* - ${items.length} item(s) in stock.\n\nTap an item to remove it.`,
+        { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }
       );
+    } catch (err) {
+      // Surface the actual error to the admin instead of failing silently
+      // (a thrown error here, after answerCbQuery() already fired, would
+      // otherwise just vanish into the bot's global error logger with no
+      // visible sign anything went wrong).
+      console.error('[admin] showStockList failed:', err);
+      await ctx.reply(`❌ Failed to load stock list: ${err.message}`);
     }
-
-    // One button per item, labeled with a short preview of the credential
-    // (Telegram truncates long button labels anyway) - tap it to remove
-    // that exact item from stock.
-    const rows = items.map((item, i) => {
-      const preview = item.credential.split('\n')[0].slice(0, 40);
-      return [Markup.button.callback(`🗑 ${i + 1}. ${preview}`, `adm_delstock_${serviceId}_${planId}_${item.id}`)];
-    });
-    rows.push([Markup.button.callback('⬅️ Back', `adm_plan_${serviceId}_${planId}`)]);
-
-    await ctx.editMessageText(
-      `📋 *${plan.title}* - ${items.length} item(s) in stock.\n\nTap an item to remove it.`,
-      { parse_mode: 'Markdown', ...Markup.inlineKeyboard(rows) }
-    );
   }
 
   bot.action(/^adm_delstock_(.+)_(.+)_(.+)$/, adminOnly(async (ctx) => {
