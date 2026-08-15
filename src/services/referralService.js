@@ -34,6 +34,10 @@ async function markRewarded(referredId) {
   await referralsCol.doc(String(referredId)).update({
     rewarded: true,
     rewardedAt: admin.firestore.FieldValue.serverTimestamp(),
+    // Set here (not at referral-doc creation) so it's only ever present on
+    // referrals that actually got paid out - that's the only set the 24h
+    // membership recheck cron cares about (see jobs/referralCron.js).
+    membershipChecked: false,
   });
 }
 
@@ -97,6 +101,8 @@ module.exports = {
   tryPayoutReferral,
   getReferralStats,
   getTopReferrers,
+  getReferralsPendingMembershipCheck,
+  markMembershipChecked,
   BONUS,
 };
 
@@ -139,4 +145,25 @@ async function getTopReferrers(limit = 5) {
     .sort((a, b) => b[1] - a[1])
     .slice(0, limit)
     .map(([referrerId, count]) => ({ referrerId: Number(referrerId), count }));
+}
+
+/**
+ * Referrals that were rewarded but haven't had their 24h "did they leave
+ * the channels?" recheck yet (see jobs/referralCron.js). Two equality
+ * filters only (no range/orderBy), so no composite Firestore index is
+ * needed - the actual 24h-age check happens in the caller, comparing each
+ * doc's own rewardedAt individually.
+ */
+async function getReferralsPendingMembershipCheck() {
+  const snap = await referralsCol.where('rewarded', '==', true).where('membershipChecked', '==', false).get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
+/** Records the outcome of the 24h membership recheck for one referral. */
+async function markMembershipChecked(referredId, leftChannels) {
+  await referralsCol.doc(String(referredId)).update({
+    membershipChecked: true,
+    membershipCheckedAt: admin.firestore.FieldValue.serverTimestamp(),
+    leftChannelsAfterReward: leftChannels,
+  });
 }
