@@ -27,6 +27,7 @@ const adminMenu = Markup.inlineKeyboard([
   [Markup.button.callback('➕ Add Service', 'adm_add_service')],
   [Markup.button.callback('🗂 Manage Services & Plans', 'adm_services')],
   [Markup.button.callback('📦 Recent Orders', 'adm_orders')],
+  [Markup.button.callback('💰 Top Balances', 'adm_balances')],
   [Markup.button.callback('💰 Manage User Balance', 'adm_balance')],
   [Markup.button.callback('🚫 Ban / Unban User', 'adm_ban')],
   [Markup.button.callback('📢 Broadcast Message', 'adm_broadcast')],
@@ -186,6 +187,54 @@ function registerAdminHandler(bot) {
     await ctx.answerCbQuery();
     const beforeMillis = Number(ctx.match[1]);
     const { text, keyboard } = await renderOrdersPage(beforeMillis);
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+  }));
+
+  // ---------------- Top Balances (highest balance first) ----------------
+  const BALANCES_PAGE_SIZE = 10;
+
+  async function renderBalancesPage(afterBalance) {
+    const users = await userService.getUsersByBalance(BALANCES_PAGE_SIZE, afterBalance);
+
+    if (users.length === 0) {
+      return { text: afterBalance !== null ? '💰 No more users.' : '💰 No users yet.', keyboard: Markup.inlineKeyboard([backToMenuRow()]) };
+    }
+
+    // HTML + escapeHtml + tg://user link, same reasoning as Recent Orders:
+    // display names are free text (Telegram profile names) that could
+    // otherwise break Markdown/HTML parsing, and the tappable link opens
+    // that user's chat directly without needing to copy their numeric ID.
+    const lines = users.map((u, i) => {
+      const name = escapeHtml(u.name || 'Unknown');
+      const label = `<a href="tg://user?id=${u.telegramId}">${name}</a> (ID: ${u.telegramId})`;
+      return `${i + 1}. ${label}\n   💰 ${taka(u.balance || 0)}`;
+    });
+
+    const lastBalance = users[users.length - 1].balance || 0;
+    const hasMore = users.length === BALANCES_PAGE_SIZE;
+
+    const buttons = [];
+    if (hasMore) buttons.push([Markup.button.callback('➡️ Next Page', `adm_balances_${lastBalance}`)]);
+    buttons.push(backToMenuRow());
+
+    return { text: `💰 <b>Top Balances</b>\n\n${lines.join('\n\n')}`, keyboard: Markup.inlineKeyboard(buttons) };
+  }
+
+  bot.command('topbalance', adminOnly(async (ctx) => {
+    const { text, keyboard } = await renderBalancesPage(null);
+    await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+  }));
+
+  bot.action('adm_balances', adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const { text, keyboard } = await renderBalancesPage(null);
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+  }));
+
+  bot.action(/^adm_balances_([\d.]+)$/, adminOnly(async (ctx) => {
+    await ctx.answerCbQuery();
+    const afterBalance = Number(ctx.match[1]);
+    const { text, keyboard } = await renderBalancesPage(afterBalance);
     await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
   }));
 

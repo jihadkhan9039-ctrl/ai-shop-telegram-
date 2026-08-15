@@ -184,6 +184,25 @@ async function getUserStats() {
   };
 }
 
+/**
+ * Paginated "highest balance first" user list for the admin "💰 Top
+ * Balances" view. Single-field orderBy (no secondary tiebreaker field) so
+ * this needs no composite index - Firestore auto-creates single-field
+ * indexes. Cursor is just the last-seen balance value; if several users
+ * share the exact same balance right at a page boundary, one or two could
+ * theoretically be skipped/repeated - an acceptable tradeoff here since
+ * this is an admin convenience view, not something that needs to be
+ * perfectly gapless.
+ */
+async function getUsersByBalance(limit = 10, afterBalance = null) {
+  let query = usersCol.orderBy('balance', 'desc').limit(limit);
+  if (afterBalance !== null && afterBalance !== undefined) {
+    query = query.startAfter(afterBalance);
+  }
+  const snap = await query.get();
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+}
+
 module.exports = {
   getUser,
   ensureUser,
@@ -194,4 +213,5 @@ module.exports = {
   setLastReferralPayoutAt,
   iterateAllUsers,
   getUserStats,
+  getUsersByBalance,
 };
