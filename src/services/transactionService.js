@@ -5,6 +5,9 @@
  *   trxId       string   (bKash/Nagad transaction id, used as doc id -> natural uniqueness)
  *   amount      number
  *   method      string   "bKash" | "Nagad" | "unknown"
+ *   sender      string   the SMS's alphanumeric sender ID (e.g. "bKash") -
+ *                         only ever "bKash"/"Nagad" now that smsWebhook.js
+ *                         rejects anything else before this is ever called
  *   rawSms      string   original SMS text (for audits)
  *   used        boolean
  *   usedBy      number|null   telegramId that redeemed it
@@ -18,7 +21,7 @@ const { db, admin } = require('../config/firebase');
 const txCol = db.collection('transactions');
 
 /** Save an incoming SMS-parsed transaction. Uses trxId as the doc id so duplicates simply overwrite/no-op. */
-async function saveIncomingTransaction({ trxId, amount, method, rawSms }) {
+async function saveIncomingTransaction({ trxId, amount, method, sender, rawSms }) {
   const ref = txCol.doc(trxId);
   const existing = await ref.get();
   if (existing.exists) {
@@ -29,6 +32,7 @@ async function saveIncomingTransaction({ trxId, amount, method, rawSms }) {
     trxId,
     amount: Number(amount),
     method,
+    sender: sender || null,
     rawSms,
     used: false,
     usedBy: null,

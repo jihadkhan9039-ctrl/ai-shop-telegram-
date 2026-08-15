@@ -115,6 +115,35 @@ router.post('/sms-webhook', express.json(), async (req, res) => {
   // Try a handful of common field names used by Android SMS-forwarder apps.
   const body = req.body || {};
   const rawSms = body.message || body.text || body.sms || body.body || '';
+  const sender = (body.from || body.sender || body.number || '').toString().trim();
+
+  // --- Sender allowlist: only trust SMS that actually came from the ---
+  // --- official "bKash"/"Nagad" alphanumeric sender ID.               ---
+  // The regex-based parseSms() below matches on TEXT CONTENT ALONE - it
+  // has no way to tell a genuine bKash "money received" SMS apart from
+  // someone manually texting the exact same wording from an ordinary
+  // phone number to trick the shop into treating it as a real payment.
+  // bKash's own security guidance is explicit about this: "Be sure that
+  // you have received the transaction SMS from 'bKash'" - real bKash/
+  // Nagad SMS always carry that exact alphanumeric sender ID, never a
+  // regular phone number. Anything else is rejected outright and logged
+  // as a possible spoofing attempt, regardless of how convincing the
+  // message text looks.
+  const ALLOWED_SENDERS = (process.env.SMS_ALLOWED_SENDERS || 'bkash,nagad')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  const senderNormalized = sender.toLowerCase().replace(/[^a-z0-9]/g, '');
+  const senderAllowed = ALLOWED_SENDERS.some((allowed) => senderNormalized === allowed.replace(/[^a-z0-9]/g, ''));
+
+  if (!senderAllowed) {
+    console.warn(
+      `[sms-webhook] ⚠️ REJECTED - sender "${sender || '(none provided)'}" is not an allowed payment provider ` +
+        `(allowed: ${ALLOWED_SENDERS.join(', ')}). This looks like it could be a spoofed/fake payment SMS - ` +
+        `NOT recorded as a transaction. Raw text: ${rawSms.slice(0, 200)}`
+    );
+    return res.status(403).json({ ok: false, error: 'Sender is not a recognized payment provider' });
+  }
 
   const parsed = parseSms(rawSms);
   if (!parsed) {
@@ -127,6 +156,7 @@ router.post('/sms-webhook', express.json(), async (req, res) => {
       trxId: parsed.trxId,
       amount: parsed.amount,
       method: parsed.method,
+      sender,
       rawSms,
     });
     console.log(`[sms-webhook] Saved transaction ${parsed.trxId} (${parsed.method}, ${parsed.amount})`);
