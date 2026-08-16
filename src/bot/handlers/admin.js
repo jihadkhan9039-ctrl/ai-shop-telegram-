@@ -19,6 +19,7 @@ const { Markup } = require('telegraf');
 const shopService = require('../../services/shopService');
 const userService = require('../../services/userService');
 const referralService = require('../../services/referralService');
+const transactionService = require('../../services/transactionService');
 const { taka, isAdmin, escapeHtml } = require('../../utils/helpers');
 
 // ---------- keyboards ----------
@@ -71,6 +72,51 @@ function registerAdminHandler(bot) {
   // getUserStats/getSalesStats/getReferralStats) - cheap regardless of how
   // large the collections grow, since count() is a server-side aggregation
   // rather than downloading every document.
+  // ---------------- Manual deposit verification (Yes/No from admin) ----------------
+  // Fallback for when the SMS webhook never received a payment SMS (e.g.
+  // admin's phone had no internet at that moment) - see balance.js, which
+  // creates the pending request and sends this Yes/No prompt.
+  bot.action(/^mdep_(yes|no)_(.+)$/, adminOnly(async (ctx) => {
+    const approve = ctx.match[1] === 'yes';
+    const trxId = ctx.match[2];
+
+    try {
+      const data = await transactionService.resolveManualDepositRequest(trxId, approve, ctx.from.id);
+
+      if (approve) {
+        await userService.adjustBalance(data.telegramId, data.claimedAmount);
+        const user = await userService.getUser(data.telegramId).catch(() => null);
+        await ctx.telegram
+          .sendMessage(
+            data.telegramId,
+            `✅ *Payment Verified!*\n\n${taka(data.claimedAmount)} আপনার ব্যালেন্সে যোগ হয়েছে।\n` +
+              `💵 New Balance: *${taka(user ? user.balance : data.claimedAmount)}*`,
+            { parse_mode: 'Markdown' }
+          )
+          .catch((e) => console.error('[admin] Failed to notify user of manual deposit approval:', e.message));
+      } else {
+        await ctx.telegram
+          .sendMessage(
+            data.telegramId,
+            `❌ আপনার জমা দেওয়া TrxID (\`${trxId}\`) যাচাই করা যায়নি। ভুল হলে সঠিক TrxID দিয়ে আবার চেষ্টা করুন অথবা সাপোর্টে যোগাযোগ করুন।`,
+            { parse_mode: 'Markdown' }
+          )
+          .catch((e) => console.error('[admin] Failed to notify user of manual deposit rejection:', e.message));
+      }
+
+      await ctx.answerCbQuery(approve ? 'Approved and credited.' : 'Rejected.');
+      await ctx.editMessageText(
+        `${ctx.update.callback_query.message.text}\n\n${approve ? '✅ APPROVED' : '❌ REJECTED'} by admin.`
+      );
+    } catch (err) {
+      if (err.message === 'ALREADY_RESOLVED') {
+        return ctx.answerCbQuery('Already handled.', { show_alert: true });
+      }
+      console.error('[admin] resolveManualDepositRequest failed:', err);
+      await ctx.answerCbQuery('❌ Error - check logs.', { show_alert: true });
+    }
+  }));
+
   bot.command('status', adminOnly(async (ctx) => {
     const waitMsg = await ctx.reply('⏳ Gathering stats...');
     try {
