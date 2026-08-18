@@ -11,18 +11,31 @@
  * PAYOUT POLICY: the bonus is paid INSTANTLY the moment the referred user
  * completes force-join verification for the very first time (see
  * forceJoin.js, which calls tryPayoutReferral() below). There is no
- * holding period, no cooldown, and no daily cap - every valid referral
- * gets paid out immediately, every time.
+ * holding period, no cooldown, and no daily cap.
+ *
+ * ABUSE DETECTION: instead of a cap that slows down every referrer, this
+ * watches for an unusual BURST of rewarded referrals from the same
+ * referrer in a short window (REFERRAL_ABUSE_THRESHOLD referrals within
+ * REFERRAL_ABUSE_WINDOW_MINUTES minutes - default 5 within 10) - the
+ * pattern you'd expect from someone farming fake accounts, not a real
+ * person organically sharing their link. When that's detected, the
+ * referrer is auto-banned (see setBanned in userService) and the admin is
+ * notified. The referral that tipped the threshold still gets paid (the
+ * pattern is only visible after the fact), but every referral after that
+ * won't be, since banned referrers are never paid out.
  * ------------------------------------------------------------
  */
 
 const { db, admin } = require('../config/firebase');
-const { adjustBalance, getUser, setLastReferralPayoutAt } = require('./userService');
+const { adjustBalance, getUser, setBanned, setLastReferralPayoutAt } = require('./userService');
 const { taka } = require('../utils/helpers');
 
 const referralsCol = db.collection('referrals');
 
 const BONUS = Number(process.env.REFERRAL_BONUS || 5);
+const ABUSE_WINDOW_MS = Number(process.env.REFERRAL_ABUSE_WINDOW_MINUTES || 10) * 60 * 1000;
+const ABUSE_THRESHOLD = Number(process.env.REFERRAL_ABUSE_THRESHOLD || 5);
+const ADMIN_ID = process.env.ADMIN_ID;
 
 /** All referral records that have not yet been rewarded (used by the cron safety-sweep). */
 async function getPendingReferrals() {
@@ -91,6 +104,50 @@ async function tryPayoutReferral(referredId, telegram) {
           `💰 ${taka(BONUS)} আপনার ব্যালেন্সে যোগ হয়েছে।`
       )
       .catch((e) => console.error('[referral] failed to notify referrer of payout:', e.message));
+  }
+
+  await checkForAbuseAndBan(ref.referrerId, telegram);
+}
+
+/**
+ * Runs right after every successful payout. Counts how many referrals
+ * this same referrer has had REWARDED within the last ABUSE_WINDOW_MS -
+ * a burst well beyond what a real person sharing their link organically
+ * would produce is the signature of fake-account farming. If the count
+ * crosses ABUSE_THRESHOLD, auto-bans the referrer (so nothing further
+ * gets paid to them) and DMs the admin with the details for a manual
+ * look. This never un-bans automatically - that's an admin decision.
+ */
+async function checkForAbuseAndBan(referrerId, telegram) {
+  const referrer = await getUser(referrerId).catch(() => null);
+  if (!referrer || referrer.banned) return; // already banned, or lookup failed - nothing to do
+
+  const snap = await referralsCol.where('referrerId', '==', Number(referrerId)).where('rewarded', '==', true).get();
+  const windowStart = Date.now() - ABUSE_WINDOW_MS;
+  const recentCount = snap.docs.filter((d) => {
+    const rewardedAt = d.data().rewardedAt;
+    const ms = rewardedAt && rewardedAt.toMillis ? rewardedAt.toMillis() : null;
+    return ms !== null && ms >= windowStart;
+  }).length;
+
+  if (recentCount < ABUSE_THRESHOLD) return;
+
+  await setBanned(referrerId, true);
+  console.warn(`[referral] ⚠️ AUTO-BANNED referrer ${referrerId}: ${recentCount} referrals rewarded within ${ABUSE_WINDOW_MS / 60000} minutes (threshold: ${ABUSE_THRESHOLD}).`);
+
+  if (telegram && ADMIN_ID) {
+    telegram
+      .sendMessage(
+        ADMIN_ID,
+        `🚨 Referrer auto-banned - unusual referral activity\n\n` +
+          `Referrer: ${referrer.name || 'Unknown'} (ID: ${referrerId})\n` +
+          `${recentCount} referrals rewarded within ${ABUSE_WINDOW_MS / 60000} minutes (threshold: ${ABUSE_THRESHOLD}).\n\n` +
+          `They've been automatically banned - use /adminpanel → Ban/Unban User to review and unban if this was a false positive (e.g. a genuinely popular referrer).`
+      )
+      .catch((e) => console.error('[referral] failed to notify admin of auto-ban:', e.message));
+    telegram
+      .sendMessage(referrerId, `🚫 আপনার একাউন্টে অস্বাভাবিক রেফারেল কার্যকলাপ শনাক্ত হয়েছে, তাই এটি সাময়িকভাবে ব্লক করা হয়েছে। এটি ভুল মনে হলে সাপোর্টে যোগাযোগ করুন।`)
+      .catch((e) => console.error('[referral] failed to notify banned referrer:', e.message));
   }
 }
 
