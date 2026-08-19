@@ -29,6 +29,27 @@ async function getUser(telegramId) {
 }
 
 /**
+ * Captcha status is checked/set independently of the full profile
+ * (ensureUser/hasFullProfile below), using a plain merge-set that only
+ * ever touches the `captchaVerified` field. This deliberately mirrors the
+ * earlier fix for the "partial stub doc" bug: ensureUser's own
+ * hasFullProfile check looks specifically at the `balance` field, so a
+ * captcha-only write here can never be mistaken for a fully-created
+ * profile, and never blocks one from being created properly later.
+ */
+async function hasPassedCaptcha(telegramId) {
+  const snap = await usersCol.doc(String(telegramId)).get();
+  return snap.exists && snap.data().captchaVerified === true;
+}
+
+async function markCaptchaPassed(telegramId) {
+  await usersCol.doc(String(telegramId)).set(
+    { captchaVerified: true, captchaVerifiedAt: admin.firestore.FieldValue.serverTimestamp() },
+    { merge: true }
+  );
+}
+
+/**
  * Create the user document if it doesn't already have a full profile.
  * Returns { user, isNew }.
  *
@@ -205,6 +226,8 @@ async function getUsersByBalance(limit = 10, afterBalance = null) {
 
 module.exports = {
   getUser,
+  hasPassedCaptcha,
+  markCaptchaPassed,
   ensureUser,
   markChannelsVerified,
   markForceJoinRecheck,

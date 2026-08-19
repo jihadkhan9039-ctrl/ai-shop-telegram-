@@ -3,22 +3,28 @@
  * ------------------------------------------------------------
  * Creates and configures the Telegraf bot instance:
  *   1. session()            - in-memory per-user session (ctx.session)
- *   2. forceJoinMiddleware  - blocks everything until 4 channels joined
- *   3. all feature handlers - start, support, referral, balance, shop, admin
+ *   2. privateChatOnly      - ignores anything outside 1-on-1 chats
+ *   3. captchaMiddleware    - blocks new users until a CAPTCHA is solved
+ *   4. captureReferralOnStart - records the user + referral before force-join can block it
+ *   5. bannedGuard          - blocks banned users everywhere
+ *   6. forceJoinMiddleware  - blocks everything until 4 channels joined
+ *   7. all feature handlers - start, support, referral, balance, shop, admin
  * ------------------------------------------------------------
  */
 
 const { Telegraf, session } = require('telegraf');
 
 const { forceJoinMiddleware } = require('./middlewares/forceJoin');
+const { captchaMiddleware } = require('./middlewares/captcha');
 const { registerStartHandler } = require('./handlers/start');
 const { registerSupportHandler } = require('./handlers/support');
 const { registerReferralHandler } = require('./handlers/referral');
 const { registerBalanceHandler } = require('./handlers/balance');
 const { registerShopHandler } = require('./handlers/shop');
 const { registerAdminHandler } = require('./handlers/admin');
-const { ensureUser, getUser } = require('../services/userService');
-const { parseReferralCode, taka, isAdmin } = require('../utils/helpers');
+const { getUser } = require('../services/userService');
+const { isAdmin } = require('../utils/helpers');
+const { recordReferralIfAny } = require('../utils/referralCapture');
 
 /**
  * This bot is designed for 1-on-1 private chats only (shop, balance, admin
@@ -49,28 +55,8 @@ async function captureReferralOnStart(ctx, next) {
   const text = ctx.message && typeof ctx.message.text === 'string' ? ctx.message.text : null;
   if (text && /^\/start(\s|$)/.test(text)) {
     const payload = text.replace(/^\/start\s*/, '').trim();
-    const referrerId = payload ? parseReferralCode(payload) : null;
-    console.log(`[captureReferralOnStart] /start from ${ctx.from.id}, payload="${payload}", parsed referrerId=${referrerId}`);
-    try {
-      const { user, isNew } = await ensureUser(ctx, referrerId);
-      // Only notify once, right when the referral relationship is first created
-      // (isNew guards against re-notifying on every subsequent /start).
-      if (isNew && user.referredBy) {
-        const referredName = ctx.from.first_name || 'Someone';
-        const bonus = process.env.REFERRAL_BONUS || '5';
-        ctx.telegram
-          .sendMessage(
-            user.referredBy,
-            `🎉 নতুন রেফারেল!\n\n` +
-              `${referredName} আপনার লিংক দিয়ে বটে join করেছেন।\n\n` +
-              `সে ৪টা চ্যানেল জয়েন করে ভেরিফাই সম্পন্ন করলেই আপনি সাথে সাথে ${taka(bonus)} বোনাস পাবেন।\n\n` +
-              `"👥 Refer & Earn" → "📋 My Referral List" থেকে স্ট্যাটাস দেখতে পারবেন।`
-          )
-          .catch((e) => console.error('[captureReferralOnStart] failed to notify referrer:', e.message));
-      }
-    } catch (err) {
-      console.error('[captureReferralOnStart] failed to create user/referral record:', err);
-    }
+    console.log(`[captureReferralOnStart] /start from ${ctx.from.id}, payload="${payload}"`);
+    await recordReferralIfAny(ctx, payload);
   }
   return next();
 }
@@ -100,17 +86,22 @@ function createBot() {
   // 2. Never process/respond to anything outside a private 1-on-1 chat.
   bot.use(privateChatOnly);
 
-  // 3. Record the user + referral relationship on /start BEFORE force-join
+  // 3. New users must pass a simple button-tap CAPTCHA before ANYTHING
+  //    else happens - including their referral link being recorded. Raises
+  //    the cost of scripted fake-account referral farming.
+  bot.use(captchaMiddleware);
+
+  // 4. Record the user + referral relationship on /start BEFORE force-join
   //    can block the update (see big comment above).
   bot.use(captureReferralOnStart);
 
-  // 4. Block banned users everywhere, not just at /start.
+  // 5. Block banned users everywhere, not just at /start.
   bot.use(bannedGuard);
 
-  // 5. Gate every update behind the 4-channel force-join check.
+  // 6. Gate every update behind the 4-channel force-join check.
   bot.use(forceJoinMiddleware);
 
-  // 6. Feature handlers, in an order that lets "hears" exact-matches win
+  // 7. Feature handlers, in an order that lets "hears" exact-matches win
   //    before the generic catch-all listeners inside balance.js / admin.js.
   registerStartHandler(bot);
   registerSupportHandler(bot);
